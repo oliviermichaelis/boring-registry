@@ -2,6 +2,8 @@ package servercmd
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"net/http"
@@ -50,6 +52,13 @@ type Config struct {
 	APIKey                 string
 	ListenAddress          string
 	TelemetryListenAddress string
+
+	LoginConfig string
+}
+
+type TFConfig struct {
+	ModulesV1 string                 `json:"modules.v1"`
+	LoginV1   map[string]interface{} `json:"login.v1"`
 }
 
 func (c *Config) Exec(ctx context.Context, args []string) error {
@@ -147,11 +156,32 @@ func (c *Config) Exec(ctx context.Context, args []string) error {
 		service = module.LoggingMiddleware(c.Logger)(service)
 	}
 
+	tfConfig := &TFConfig{
+		ModulesV1: fmt.Sprintf("%s/modules", prefix),
+	}
+
+	if c.LoginConfig != "" {
+		loginConfig, err := base64.StdEncoding.DecodeString(c.LoginConfig)
+		if err != nil {
+			return err
+		}
+
+		if err := json.Unmarshal(loginConfig, &tfConfig.LoginV1); err != nil {
+			return err
+		}
+	}
+
 	{
 		mux := http.NewServeMux()
 		mux.HandleFunc("/.well-known/terraform.json", func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Add("Content-type", "application/json")
-			w.Write([]byte(fmt.Sprintf(`{"modules.v1": "%s/modules"}`, prefix)))
+
+			b, err := json.Marshal(tfConfig)
+			if err != nil {
+				panic(err)
+			}
+
+			w.Write(b)
 		})
 
 		opts := []httptransport.ServerOption{
@@ -242,6 +272,7 @@ func New(config *rootcmd.Config) *ffcli.Command {
 	fs.StringVar(&cfg.ListenAddress, "listen-address", ":5601", "Listen address for the registry api")
 	fs.StringVar(&cfg.TelemetryListenAddress, "telemetry-listen-address", ":7801", "Listen address for telemetry")
 	fs.StringVar(&cfg.APIKey, "api-key", "", "Comma-separated string of static API keys to protect the server with")
+	fs.StringVar(&cfg.LoginConfig, "login-config", "", "Base64 encoded login config")
 	fs.StringVar(&cfg.RegistryType, "type", "", "Registry type to use (currently only \"s3\" and \"gcs\" is supported)")
 	fs.StringVar(&cfg.S3Bucket, "s3-bucket", "", "Bucket to use when using the S3 registry type")
 	fs.StringVar(&cfg.S3Prefix, "s3-prefix", "", "Prefix to use when using the S3 registry type")
