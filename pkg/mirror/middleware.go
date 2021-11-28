@@ -83,6 +83,7 @@ type proxyRegistry struct {
 	listProviderVersions map[string]endpoint.Endpoint // except for Service.ListProviderVersions
 }
 
+// ListProviderVersions returns the available versions fetched from the upstream registry, as well as from the pull-through cache
 func (p *proxyRegistry) ListProviderVersions(ctx context.Context, hostname, namespace, name string) (*ProviderVersions, error) {
 	g, _ := errgroup.WithContext(ctx)
 
@@ -92,7 +93,7 @@ func (p *proxyRegistry) ListProviderVersions(ctx context.Context, hostname, name
 		// Check if there is already an endpoint.Endpoint for the upstream registry, namespace and name
 		id := fmt.Sprintf("%s/%s/%s", hostname, namespace, name)
 		if _, ok := p.listProviderVersions[id]; !ok {
-			upstreamUrl, err := url.Parse(fmt.Sprintf("https://%s/v1/providers/%s/%s", hostname, namespace, name))
+			upstreamUrl, err := url.Parse(fmt.Sprintf("https://%s/v1/providers/%s/%s/versions", hostname, namespace, name))
 			if err != nil {
 				return err
 			}
@@ -111,14 +112,14 @@ func (p *proxyRegistry) ListProviderVersions(ctx context.Context, hostname, name
 		if err != nil {
 			return err
 		}
-		resp, ok := response.(listProviderVersionsResponse)
+		resp, ok := response.(listResponse)
 		if !ok {
 			return fmt.Errorf("failed type assertion for %v", response)
 		}
 		// Convert the response to the desired data format
 		upstreamVersions = &ProviderVersions{Versions: make(map[string]EmptyObject)}
 		for _, version := range resp.Versions {
-			upstreamVersions.Versions[version] = EmptyObject{}
+			upstreamVersions.Versions[version.Version] = EmptyObject{}
 		}
 		return nil
 	})
@@ -134,6 +135,7 @@ func (p *proxyRegistry) ListProviderVersions(ctx context.Context, hostname, name
 	})
 
 	if err := g.Wait(); err != nil {
+		// Check for net.OpError, as that is an indication for network errors. There is likely a better solution to the problem
 		var e *net.OpError
 		if !errors.As(err, &e) {
 			return nil, err

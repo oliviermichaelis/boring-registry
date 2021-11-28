@@ -46,7 +46,19 @@ func (s *service) ListProviderVersions(ctx context.Context, hostname, namespace,
 }
 
 func (s *service) ListProviderInstallation(ctx context.Context, hostname, namespace, name, version string) (*core.Provider, error) {
-	panic("implement listproviderinstallation")
+	if hostname == "" || namespace == "" || name == "" || version == "" {
+		return nil, errors.New("invalid parameters")
+	}
+
+	//opts := storage.ProviderOpts{
+	//	Hostname:  hostname,
+	//	Namespace: namespace,
+	//	Name:      name,
+	//	Version:   version,
+	//}
+
+
+	panic("something")
 }
 
 //func (s *service) FetchUpstreamVersions(ctx context.Context) {
@@ -65,7 +77,7 @@ func NewService(storage storage.Storage) Service {
 }
 
 // EmptyObject exists to return an `{}` JSON object to match the protocol spec
-type EmptyObject struct {}
+type EmptyObject struct{}
 
 // TODO(oliviermichaelis): could be renamed as it clashes with the other core.ProviderVersion
 // ProviderVersions holds the response that is passed up to the endpoint
@@ -83,4 +95,3 @@ func newProviderVersions(providers *[]core.Provider) *ProviderVersions {
 	}
 	return p
 }
-

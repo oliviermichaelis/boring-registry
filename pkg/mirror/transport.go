@@ -31,7 +31,7 @@ func MakeHandler(svc Service, auth endpoint.Middleware, options ...httptransport
 
 	r.Methods("GET").Path(`/{hostname}/{namespace}/{name}/index.json`).Handler(
 		httptransport.NewServer(
-			auth(listVersionsEndpoint(svc)),
+			auth(listProviderVersionsEndpoint(svc)),
 			decodeListRequest,
 			httptransport.EncodeJSONResponse,
 			append(
@@ -75,9 +75,9 @@ func decodeListRequest(ctx context.Context, r *http.Request) (interface{}, error
 	}
 
 	return listVersionsRequest{
-		hostname:  hostname,
-		namespace: namespace,
-		name:      name,
+		Hostname:  hostname,
+		Namespace: namespace,
+		Name:      name,
 	}, nil
 }
 
@@ -170,12 +170,22 @@ func encodeUpstreamListProviderVersionsRequest(_ context.Context, r *http.Reques
 	return nil
 }
 
-type listProviderVersionsResponse struct {
-	Versions []string `json:"versions,omitempty"`
+type listResponse struct {
+	Versions []listResponseVersion `json:"versions,omitempty"`
+}
+
+type listResponseVersion struct {
+	Version   string     `json:"version,omitempty"`
+	Platforms []platform `json:"platforms,omitempty"`
+}
+
+type platform struct {
+	OS   string `json:"os,omitempty"`
+	Arch string `json:"arch,omitempty"`
 }
 
 func decodeUpstreamListProviderVersionsResponse(_ context.Context, r *http.Response) (interface{}, error) {
-	var response listProviderVersionsResponse
+	var response listResponse
 	//var response interface{}
 	if err := json.NewDecoder(r.Body).Decode(&response); err != nil {
 		return nil, err

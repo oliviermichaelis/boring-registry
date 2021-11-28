@@ -8,23 +8,23 @@ import (
 )
 
 type listVersionsRequest struct {
-	hostname  string `json:"hostname,omitempty"`
-	namespace string `json:"namespace,omitempty"`
-	name      string `json:"name,omitempty"`
+	Hostname  string `json:"hostname,omitempty"`
+	Namespace string `json:"namespace,omitempty"`
+	Name      string `json:"name,omitempty"`
 }
 
 type listVersionsResponse struct {
 	Versions map[string]EmptyObject `json:"versions"`
 }
 
-func listVersionsEndpoint(svc Service) endpoint.Endpoint {
+func listProviderVersionsEndpoint(svc Service) endpoint.Endpoint {
 	return func(ctx context.Context, request interface{}) (interface{}, error) {
 		req, ok := request.(listVersionsRequest)
 		if !ok {
 			return nil, fmt.Errorf("type assertion failed for listVersionsRequest")
 		}
 
-		versions, err := svc.ListProviderVersions(ctx, req.hostname, req.namespace, req.name)
+		versions, err := svc.ListProviderVersions(ctx, req.Hostname, req.Namespace, req.Name)
 		if err != nil {
 			return nil, err
 		}
@@ -33,6 +33,17 @@ func listVersionsEndpoint(svc Service) endpoint.Endpoint {
 			Versions: versions.Versions,
 		}, nil
 	}
+}
+
+type listProviderInstallationRequest struct {
+	Hostname  string `json:"hostname,omitempty"`
+	Namespace string `json:"namespace,omitempty"`
+	Name      string `json:"name,omitempty"`
+	Version   string `json:"version,omitempty"`
+}
+
+type listProviderInstallationResponse struct {
+
 }
 
 //type downloadRequest struct {
