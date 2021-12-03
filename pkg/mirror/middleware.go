@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/TierMobility/boring-registry/pkg/core"
 	"github.com/go-kit/kit/endpoint"
 	httptransport "github.com/go-kit/kit/transport/http"
 	"golang.org/x/sync/errgroup"
@@ -12,7 +13,6 @@ import (
 	"net/url"
 	"time"
 
-	"github.com/TierMobility/boring-registry/pkg/core"
 	"github.com/go-kit/kit/log"
 	"github.com/go-kit/kit/log/level"
 )
@@ -46,7 +46,7 @@ func (mw loggingMiddleware) ListProviderVersions(ctx context.Context, hostname, 
 	return mw.next.ListProviderVersions(ctx, hostname, namespace, name)
 }
 
-func (mw loggingMiddleware) ListProviderInstallation(ctx context.Context, hostname, namespace, name, version string) (provider *core.Provider, err error) {
+func (mw loggingMiddleware) ListProviderInstallation(ctx context.Context, hostname, namespace, name, version string) (provider *Archives, err error) {
 	defer func(begin time.Time) {
 		logger := level.Info(mw.logger)
 		if err != nil {
@@ -79,8 +79,9 @@ func LoggingMiddleware(logger log.Logger) Middleware {
 
 // TODO(oliviermichaelis): split out into a separate file
 type proxyRegistry struct {
-	next                 Service                      // serve most requests via this service
-	listProviderVersions map[string]endpoint.Endpoint // except for Service.ListProviderVersions
+	next                     Service                      // serve most requests via this service
+	listProviderVersions     map[string]endpoint.Endpoint // except for Service.ListProviderVersions
+	listProviderInstallation map[string]endpoint.Endpoint
 }
 
 // ListProviderVersions returns the available versions fetched from the upstream registry, as well as from the pull-through cache
@@ -90,42 +91,22 @@ func (p *proxyRegistry) ListProviderVersions(ctx context.Context, hostname, name
 	// Get providers from the upstream registry if it is reachable
 	upstreamVersions := &ProviderVersions{}
 	g.Go(func() error {
-		// Check if there is already an endpoint.Endpoint for the upstream registry, namespace and name
-		id := fmt.Sprintf("%s/%s/%s", hostname, namespace, name)
-		if _, ok := p.listProviderVersions[id]; !ok {
-			upstreamUrl, err := url.Parse(fmt.Sprintf("https://%s/v1/providers/%s/%s/versions", hostname, namespace, name))
-			if err != nil {
-				return err
-			}
-
-			p.listProviderVersions[id] = httptransport.NewClient(http.MethodGet, upstreamUrl, encodeUpstreamListProviderVersionsRequest, decodeUpstreamListProviderVersionsResponse).Endpoint()
-		}
-
-		// TODO(oliviermichaelis): we pass the same context, even though the deadline should be slightly earlier
-		e, exists := p.listProviderVersions[id]
-		if !exists {
-			return fmt.Errorf("the endpoint with id %s doesn't exist", id)
-		}
-
-
-		response, err := e(ctx, listVersionsRequest{}) // TODO(oliviermichaelis): The object is just a placeholder for now, as we don't have a payload
+		versions, err := p.getUpstreamProviders(ctx, hostname, namespace, name)
 		if err != nil {
 			return err
 		}
-		resp, ok := response.(listResponse)
-		if !ok {
-			return fmt.Errorf("failed type assertion for %v", response)
-		}
+
 		// Convert the response to the desired data format
 		upstreamVersions = &ProviderVersions{Versions: make(map[string]EmptyObject)}
-		for _, version := range resp.Versions {
+		for _, version := range versions {
 			upstreamVersions.Versions[version.Version] = EmptyObject{}
 		}
 		return nil
 	})
 
-	// Get providers from the pull-through cache
+	// Get provider versions from the pull-through cache
 	cachedVersions := &ProviderVersions{}
+	// TODO(oliviermichaelis): check for concurrency problems
 	g.Go(func() (err error) {
 		cachedVersions, err = p.next.ListProviderVersions(ctx, hostname, namespace, name)
 		if err != nil {
@@ -152,15 +133,103 @@ func (p *proxyRegistry) ListProviderVersions(ctx context.Context, hostname, name
 	return cachedVersions, nil
 }
 
-func (p *proxyRegistry) ListProviderInstallation(ctx context.Context, hostname, namespace, name, version string) (*core.Provider, error) {
-	return p.next.ListProviderInstallation(ctx, hostname, namespace, name, version)
+func (p *proxyRegistry) ListProviderInstallation(ctx context.Context, hostname, namespace, name, version string) (*Archives, error) {
+	g, _ := errgroup.WithContext(ctx)
+
+	// Get archives from the pull-through cache
+	cachedArchives := &Archives{}
+	g.Go(func() (err error) {
+		cachedArchives, err = p.next.ListProviderInstallation(ctx, hostname, namespace, name, version)
+		if err != nil {
+			return err
+		}
+		return nil
+	})
+
+	upstreamArchives := &Archives{
+		Archives: make(map[string]Archive),
+	}
+	g.Go(func() error {
+		versions, err := p.getUpstreamProviders(ctx, hostname, namespace, name)
+		if err != nil {
+			return err
+		}
+
+		for _, v := range versions {
+			if v.Version == version {
+				for _, platform := range v.Platforms {
+					provider := core.Provider{
+						Namespace: namespace,
+						Name:      name,
+						Version:   version,
+						OS:        platform.OS,
+						Arch:      platform.Arch,
+					}
+					key := fmt.Sprintf("%s_%s", platform.OS, platform.Arch)
+					upstreamArchives.Archives[key] = Archive{
+						Url:    provider.ArchiveFileName(),
+						Hashes: nil, // TODO(oliviermichaelis): hash is missing
+					}
+				}
+			}
+		}
+		return nil
+	})
+
+	if err := g.Wait(); err != nil {
+		// Check for net.OpError, as that is an indication for network errors. There is likely a better solution to the problem
+		var e *net.OpError
+		if !errors.As(err, &e) {
+			return nil, err
+		}
+		// TODO(oliviermichaelis): log this properly and expose a metric
+		fmt.Println(fmt.Errorf("couldn't reach upstream registry: %v", err))
+	}
+
+	// Warning, this is overwriting locally cached archives. In case a version was deleted from the upstream, we can't serve it locally anymore
+	// This could be solved with a more complex merge
+	for k, v := range upstreamArchives.Archives {
+		cachedArchives.Archives[k] = v
+	}
+
+	return cachedArchives, nil
+}
+
+func (p *proxyRegistry) getUpstreamProviders(ctx context.Context, hostname, namespace, name string) ([]listResponseVersion, error) {
+	// Check if there is already an endpoint.Endpoint for the upstream registry, namespace and name
+	id := fmt.Sprintf("%s/%s/%s", hostname, namespace, name)
+	if _, ok := p.listProviderVersions[id]; !ok {
+		upstreamUrl, err := url.Parse(fmt.Sprintf("https://%s/v1/providers/%s/%s/versions", hostname, namespace, name))
+		if err != nil {
+			return nil, err
+		}
+
+		p.listProviderVersions[id] = httptransport.NewClient(http.MethodGet, upstreamUrl, encodeRequest, decodeUpstreamListProviderVersionsResponse).Endpoint()
+	}
+
+	// TODO(oliviermichaelis): we pass the same context, even though the deadline should be slightly earlier
+	e, exists := p.listProviderVersions[id]
+	if !exists {
+		return nil, fmt.Errorf("the endpoint with id %s doesn't exist", id)
+	}
+
+	response, err := e(ctx, listVersionsRequest{}) // TODO(oliviermichaelis): The object is just a placeholder for now, as we don't have a payload
+	if err != nil {
+		return nil, err
+	}
+	resp, ok := response.(listResponse)
+	if !ok {
+		return nil, fmt.Errorf("failed type assertion for %v", response)
+	}
+	return resp.Versions, nil
 }
 
 func ProxyingMiddleware() Middleware {
 	return func(next Service) Service {
 		return &proxyRegistry{
-			next:   next,
-			listProviderVersions: make(map[string]endpoint.Endpoint),
+			next:                     next,
+			listProviderVersions:     make(map[string]endpoint.Endpoint),
+			listProviderInstallation: make(map[string]endpoint.Endpoint),
 		}
 	}
 }

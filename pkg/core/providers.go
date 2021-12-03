@@ -1,8 +1,14 @@
 package core
 
 import (
+	"fmt"
 	"path/filepath"
 	"strings"
+)
+
+const (
+	ProviderPrefix    = "terraform-provider-"
+	ProviderExtension = ".zip"
 )
 
 // Provider copied from provider.Provider
@@ -22,12 +28,16 @@ type Provider struct {
 	Platforms           []Platform  `json:"platforms,omitempty"`
 }
 
+func (p *Provider) ArchiveFileName() string {
+	return fmt.Sprintf("%s%s_%s_%s_%s%s", ProviderPrefix, p.Name, p.Version, p.OS, p.Arch, ProviderExtension)
+}
+
 func NewProviderFromArchive(filename string) Provider {
 	// Criterias for terraform archives:
 	// https://www.terraform.io/docs/registry/providers/publishing.html#manually-preparing-a-release
 	f := filepath.Base(filename) // This is just a precaution
-	trimmed := strings.TrimPrefix(f, "terraform-provider-")
-	trimmed = strings.TrimSuffix(trimmed, ".zip")
+	trimmed := strings.TrimPrefix(f, ProviderPrefix)
+	trimmed = strings.TrimSuffix(trimmed, ProviderExtension)
 	tokens := strings.Split(trimmed, "_")
 
 	return Provider{

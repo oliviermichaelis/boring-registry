@@ -3,6 +3,7 @@ package mirror
 import (
 	"context"
 	"errors"
+	"fmt"
 	"github.com/TierMobility/boring-registry/pkg/core"
 	"github.com/TierMobility/boring-registry/pkg/storage"
 )
@@ -16,9 +17,7 @@ type Service interface {
 
 	// ListProviderInstallation returns download URLs and associated metadata for the distribution packages for a particular version of a provider
 	// https://www.terraform.io/docs/internals/provider-network-mirror-protocol.html#list-available-installation-packages
-	ListProviderInstallation(ctx context.Context, hostname, namespace, name, version string) (*core.Provider, error)
-
-	//FetchUpstreamVersions(ctx context.Context)
+	ListProviderInstallation(ctx context.Context, hostname, namespace, name, version string) (*Archives, error)
 }
 
 type service struct {
@@ -36,7 +35,6 @@ func (s *service) ListProviderVersions(ctx context.Context, hostname, namespace,
 		Name:      name,
 	}
 
-	// TODO(oliviermichaelis): fetch upstream providers
 	providers, err := s.storage.GetMirroredProviders(ctx, opts)
 	if err != nil {
 		return nil, err
@@ -45,28 +43,33 @@ func (s *service) ListProviderVersions(ctx context.Context, hostname, namespace,
 	return newProviderVersions(providers), nil
 }
 
-func (s *service) ListProviderInstallation(ctx context.Context, hostname, namespace, name, version string) (*core.Provider, error) {
+func (s *service) ListProviderInstallation(ctx context.Context, hostname, namespace, name, version string) (*Archives, error) {
 	if hostname == "" || namespace == "" || name == "" || version == "" {
 		return nil, errors.New("invalid parameters")
 	}
 
-	//opts := storage.ProviderOpts{
-	//	Hostname:  hostname,
-	//	Namespace: namespace,
-	//	Name:      name,
-	//	Version:   version,
-	//}
+	opts := storage.ProviderOpts{
+		Hostname:  hostname,
+		Namespace: namespace,
+		Name:      name,
+		Version:   version,
+	}
 
+	providers, err := s.storage.GetMirroredProviders(ctx, opts)
+	if err != nil {
+		return nil, err
+	}
 
-	panic("something")
-}
+	archives := &Archives{Archives: make(map[string]Archive)}
+	for _, provider := range *providers {
+		key := fmt.Sprintf("%s_%s",provider.OS, provider.Arch)
+		archives.Archives[key] = Archive{
+			Url:    provider.ArchiveFileName(),
+			Hashes: nil, // TODO(oliviermichaelis): store hash somehow
+		}
+	}
 
-//func (s *service) FetchUpstreamVersions(ctx context.Context) {
-//	panic("implement fetchupstream")
-//}
-
-func (s *service) findUpstreamProviders(ctx context.Context, opts storage.ProviderOpts) {
-
+	return archives, nil
 }
 
 // NewService returns a fully initialized Service.
@@ -94,4 +97,13 @@ func newProviderVersions(providers *[]core.Provider) *ProviderVersions {
 		p.Versions[provider.Version] = EmptyObject{}
 	}
 	return p
+}
+
+type Archives struct {
+	Archives map[string]Archive `json:"archives"`
+}
+
+type Archive struct {
+	Url    string   `json:"url"`
+	Hashes []string `json:"hashes,omitempty"`
 }

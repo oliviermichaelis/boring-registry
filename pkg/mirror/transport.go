@@ -32,7 +32,7 @@ func MakeHandler(svc Service, auth endpoint.Middleware, options ...httptransport
 	r.Methods("GET").Path(`/{hostname}/{namespace}/{name}/index.json`).Handler(
 		httptransport.NewServer(
 			auth(listProviderVersionsEndpoint(svc)),
-			decodeListRequest,
+			decodeListVersionsRequest,
 			httptransport.EncodeJSONResponse,
 			append(
 				options,
@@ -42,23 +42,24 @@ func MakeHandler(svc Service, auth endpoint.Middleware, options ...httptransport
 		),
 	)
 
-	//r.Methods("GET").Path(`/{namespace}/{name}/{version}/download/{os}/{arch}`).Handler(
-	//	httptransport.NewServer(
-	//		auth(downloadEndpoint(svc)),
-	//		decodeDownloadRequest,
-	//		httptransport.EncodeJSONResponse,
-	//		append(
-	//			options,
-	//			httptransport.ServerBefore(extractMuxVars(varNamespace, varName, varOS, varArch, varVersion)),
-	//			httptransport.ServerBefore(extractHeaders("Authorization")),
-	//		)...,
-	//	),
-	//)
+	r.Methods("GET").Path(`/{hostname}/{namespace}/{name}/{version}.json`).Handler(
+		httptransport.NewServer(
+			auth(listProviderInstallationEndpoint(svc)),
+			decodeListInstallationRequest,
+			httptransport.EncodeJSONResponse,
+			append(
+				options,
+				httptransport.ServerBefore(extractMuxVars(varHostname, varNamespace, varName, varVersion)),
+				httptransport.ServerBefore(extractHeaders("Authorization")),
+			)...,
+		),
+	)
 
+	// TODO(oliviermichaelis): create handler for downloads
 	return r
 }
 
-func decodeListRequest(ctx context.Context, r *http.Request) (interface{}, error) {
+func decodeListVersionsRequest(ctx context.Context, _ *http.Request) (interface{}, error) {
 	hostname, ok := ctx.Value(varHostname).(string)
 	if !ok {
 		return nil, errors.Wrap(ErrVarMissing, "hostname")
@@ -81,40 +82,34 @@ func decodeListRequest(ctx context.Context, r *http.Request) (interface{}, error
 	}, nil
 }
 
-//func decodeDownloadRequest(ctx context.Context, r *http.Request) (interface{}, error) {
-//	namespace, ok := ctx.Value(varNamespace).(string)
-//	if !ok {
-//		return nil, errors.Wrap(ErrVarMissing, "namespace")
-//	}
-//
-//	name, ok := ctx.Value(varName).(string)
-//	if !ok {
-//		return nil, errors.Wrap(ErrVarMissing, "name")
-//	}
-//
-//	version, ok := ctx.Value(varVersion).(string)
-//	if !ok {
-//		return nil, errors.Wrap(ErrVarMissing, "version")
-//	}
-//
-//	os, ok := ctx.Value(varOS).(string)
-//	if !ok {
-//		return nil, errors.Wrap(ErrVarMissing, "os")
-//	}
-//
-//	arch, ok := ctx.Value(varArch).(string)
-//	if !ok {
-//		return nil, errors.Wrap(ErrVarMissing, "arch")
-//	}
-//
-//	return downloadRequest{
-//		namespace: namespace,
-//		name:      name,
-//		version:   version,
-//		os:        os,
-//		arch:      arch,
-//	}, nil
-//}
+func decodeListInstallationRequest(ctx context.Context, _ *http.Request) (interface{}, error) {
+	hostname, ok := ctx.Value(varHostname).(string)
+	if !ok {
+		return nil, errors.Wrap(ErrVarMissing, "hostname")
+	}
+
+	namespace, ok := ctx.Value(varNamespace).(string)
+	if !ok {
+		return nil, errors.Wrap(ErrVarMissing, "namespace")
+	}
+
+	name, ok := ctx.Value(varName).(string)
+	if !ok {
+		return nil, errors.Wrap(ErrVarMissing, "name")
+	}
+
+	version, ok := ctx.Value(varVersion).(string)
+	if !ok {
+		return nil, errors.Wrap(ErrVarMissing, "version")
+	}
+
+	return listProviderInstallationRequest{
+		Hostname:  hostname,
+		Namespace: namespace,
+		Name:      name,
+		Version: version,
+	}, nil
+}
 
 // ErrorEncoder translates domain specific errors to HTTP status codes.
 func ErrorEncoder(_ context.Context, err error, w http.ResponseWriter) {
@@ -160,8 +155,7 @@ func extractMuxVars(keys ...muxVar) httptransport.RequestFunc {
 	}
 }
 
-// TODO(oliviermichaelis): this function may be a generic function
-func encodeUpstreamListProviderVersionsRequest(_ context.Context, r *http.Request, request interface{}) error {
+func encodeRequest(_ context.Context, r *http.Request, request interface{}) error {
 	var buf bytes.Buffer
 	if err := json.NewEncoder(&buf).Encode(request); err != nil {
 		return err
@@ -176,6 +170,7 @@ type listResponse struct {
 
 type listResponseVersion struct {
 	Version   string     `json:"version,omitempty"`
+	Protocols []string   `json:"protocols,omitempty"`
 	Platforms []platform `json:"platforms,omitempty"`
 }
 
@@ -186,9 +181,16 @@ type platform struct {
 
 func decodeUpstreamListProviderVersionsResponse(_ context.Context, r *http.Response) (interface{}, error) {
 	var response listResponse
-	//var response interface{}
 	if err := json.NewDecoder(r.Body).Decode(&response); err != nil {
 		return nil, err
 	}
 	return response, nil
 }
+
+//func decodeProviderResponse(_ context.Context, r *http.Response) (interface{}, error) {
+//	var p core.Provider
+//	if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
+//		return nil, err
+//	}
+//	return p, nil
+//}

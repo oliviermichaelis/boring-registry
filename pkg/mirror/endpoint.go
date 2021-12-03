@@ -42,47 +42,18 @@ type listProviderInstallationRequest struct {
 	Version   string `json:"version,omitempty"`
 }
 
-type listProviderInstallationResponse struct {
+func listProviderInstallationEndpoint(svc Service) endpoint.Endpoint {
+	return func(ctx context.Context, request interface{}) (interface{}, error) {
+		req, ok := request.(listProviderInstallationRequest)
+		if !ok {
+			return nil, fmt.Errorf("type assertion failed for listProviderInstallationRequest")
+		}
 
+		archives, err := svc.ListProviderInstallation(ctx, req.Hostname, req.Namespace, req.Name, req.Version)
+		if err != nil {
+			return nil, err
+		}
+
+		return archives, nil
+	}
 }
-
-//type downloadRequest struct {
-//	namespace string
-//	name      string
-//	version   string
-//	os        string
-//	arch      string
-//}
-//
-//type downloadResponse struct {
-//	OS                  string      `json:"os"`
-//	Arch                string      `json:"arch"`
-//	Filename            string      `json:"filename"`
-//	DownloadURL         string      `json:"download_url"`
-//	Shasum              string      `json:"shasum"`
-//	ShasumsURL          string      `json:"shasums_url"`
-//	ShasumsSignatureURL string      `json:"shasums_signature_url"`
-//	SigningKeys         SigningKeys `json:"signing_keys"`
-//}
-//
-//func downloadEndpoint(svc Service) endpoint.Endpoint {
-//	return func(ctx context.Context, request interface{}) (interface{}, error) {
-//		req := request.(downloadRequest)
-//
-//		res, err := svc.GetProvider(ctx, req.namespace, req.name, req.version, req.os, req.arch)
-//		if err != nil {
-//			return nil, err
-//		}
-//
-//		return downloadResponse{
-//			OS:                  res.OS,
-//			Arch:                res.Arch,
-//			DownloadURL:         res.DownloadURL,
-//			Filename:            res.Filename,
-//			Shasum:              res.Shasum,
-//			SigningKeys:         res.SigningKeys,
-//			ShasumsURL:          res.SHASumsURL,
-//			ShasumsSignatureURL: res.SHASumsSignatureURL,
-//		}, nil
-//	}
-//}

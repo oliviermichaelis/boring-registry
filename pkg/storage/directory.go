@@ -96,7 +96,7 @@ func (d *DirectoryStorage) getProviders(ctx context.Context, prefix string, opts
 			}
 
 			// skip if file extension does not end with `.zip`
-			if filepath.Ext(path) != ".zip" {
+			if filepath.Ext(path) != core.ProviderExtension {
 				return nil
 			}
 
@@ -109,7 +109,15 @@ func (d *DirectoryStorage) getProviders(ctx context.Context, prefix string, opts
 
 	var providers []core.Provider
 	for _, a := range archives {
-		providers = append(providers, core.NewProviderFromArchive(a))
+		p := core.NewProviderFromArchive(a)
+
+		// Filter out providers that don't match the queried version
+		if opts.Version != "" {
+			if p.Version != opts.Version {
+				continue
+			}
+		}
+		providers = append(providers, p)
 	}
 
 	return &providers, nil
