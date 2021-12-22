@@ -39,7 +39,7 @@ var (
 	prefixModules   = fmt.Sprintf("%s/modules", prefix)
 	prefixProviders = fmt.Sprintf("%s/providers", prefix)
 	// TODO(oliviermichaelis): consider switching to another path instead of mirror
-	prefixMirror    = fmt.Sprintf("%s/mirror", prefix)
+	prefixMirror = fmt.Sprintf("%s/mirror", prefix)
 )
 
 var (
@@ -312,8 +312,8 @@ func registerMirror(mux *http.ServeMux) error {
 
 	service := mirror.NewService(s)
 	{
-		service = mirror.LoggingMiddleware(logger)(service)
 		service = mirror.ProxyingMiddleware()(service)
+		service = mirror.LoggingMiddleware(logger)(service)
 	}
 
 	opts := []httptransport.ServerOption{

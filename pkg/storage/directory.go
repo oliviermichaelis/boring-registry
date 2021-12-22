@@ -14,7 +14,7 @@ import (
 )
 
 var (
-	mirrorPrefix = "mirror"
+	mirrorPrefix          = "mirror"
 	customProvidersPrefix = "providers"
 )
 
@@ -28,6 +28,12 @@ func (d DirectoryStorage) GetMirroredProviders(ctx context.Context, opts Provide
 
 func (d DirectoryStorage) GetCustomProviders(ctx context.Context, opts ProviderOpts) (*[]core.Provider, error) {
 	return d.getProviders(ctx, customProvidersPrefix, opts)
+}
+
+func (d DirectoryStorage) GetProviderArchive(ctx context.Context, hostname string, p core.Provider) ([]byte, error) {
+	// TODO check if file exists and return corresponding error that we can match on from the caller to determine if it's missing
+	f := fmt.Sprintf("%s/%s/%s/%s/%s/%s", d.path, mirrorPrefix, hostname, p.Namespace, p.Name, p.ArchiveFileName())
+	return os.ReadFile(f)
 }
 
 func (d DirectoryStorage) GetModule(ctx context.Context, namespace, name, provider, version string) (module.Module, error) {
@@ -104,7 +110,10 @@ func (d *DirectoryStorage) getProviders(ctx context.Context, prefix string, opts
 			return nil
 		})
 	if err != nil {
-		return nil, err
+		return nil, ErrProviderNotMirrored{
+			Opts: opts,
+			Err:  err,
+		}
 	}
 
 	var providers []core.Provider

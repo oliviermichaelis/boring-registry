@@ -18,6 +18,9 @@ type Service interface {
 	// ListProviderInstallation returns download URLs and associated metadata for the distribution packages for a particular version of a provider
 	// https://www.terraform.io/docs/internals/provider-network-mirror-protocol.html#list-available-installation-packages
 	ListProviderInstallation(ctx context.Context, hostname, namespace, name, version string) (*Archives, error)
+
+	// TODO(oliviermichaelis): document and link to protocol spec
+	RetrieveProviderArchive(ctx context.Context, hostname string, p core.Provider) ([]byte, error)
 }
 
 type service struct {
@@ -62,7 +65,7 @@ func (s *service) ListProviderInstallation(ctx context.Context, hostname, namesp
 
 	archives := &Archives{Archives: make(map[string]Archive)}
 	for _, provider := range *providers {
-		key := fmt.Sprintf("%s_%s",provider.OS, provider.Arch)
+		key := fmt.Sprintf("%s_%s", provider.OS, provider.Arch)
 		archives.Archives[key] = Archive{
 			Url:    provider.ArchiveFileName(),
 			Hashes: nil, // TODO(oliviermichaelis): store hash somehow
@@ -70,6 +73,15 @@ func (s *service) ListProviderInstallation(ctx context.Context, hostname, namesp
 	}
 
 	return archives, nil
+}
+
+func (s *service) RetrieveProviderArchive(ctx context.Context, hostname string, p core.Provider) ([]byte, error) {
+	archive, err := s.storage.GetProviderArchive(ctx, hostname, p)
+	if err != nil {
+		return nil, err
+	}
+
+	return archive, nil
 }
 
 // NewService returns a fully initialized Service.

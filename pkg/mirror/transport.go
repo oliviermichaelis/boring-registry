@@ -21,6 +21,8 @@ const (
 	varNamespace muxVar = "namespace"
 	varName      muxVar = "name"
 	varVersion   muxVar = "version"
+	varOS 		 muxVar = "os"
+	varArchitecture muxVar = "architecture"
 )
 
 type header string
@@ -56,6 +58,19 @@ func MakeHandler(svc Service, auth endpoint.Middleware, options ...httptransport
 	)
 
 	// TODO(oliviermichaelis): create handler for downloads
+	// registry.terraform.io/hashicorp/random/terraform-provider-random_2.0.0_darwin_amd64.zip
+	r.Methods("GET").Path(`/{hostname}/{namespace}/{name}/terraform-provider-{nameplaceholder}_{version}_{os}_{architecture}.zip`).Handler(
+		httptransport.NewServer(
+			auth(retrieveProviderArchiveEndpoint(svc)),
+			decodeRetrieveProviderArchiveRequest,
+			httptransport.EncodeJSONResponse,
+			append(
+				options,
+				httptransport.ServerBefore(extractMuxVars(varHostname, varNamespace, varName, varVersion, varOS, varArchitecture)),
+				httptransport.ServerBefore(extractHeaders("Authorization")),
+			)...,
+		),
+	)
 	return r
 }
 
@@ -107,8 +122,50 @@ func decodeListInstallationRequest(ctx context.Context, _ *http.Request) (interf
 		Hostname:  hostname,
 		Namespace: namespace,
 		Name:      name,
-		Version: version,
+		Version:   version,
 	}, nil
+}
+
+func decodeRetrieveProviderArchiveRequest(ctx context.Context, _ *http.Request) (interface{}, error) {
+	hostname, ok := ctx.Value(varHostname).(string)
+	if !ok {
+		return nil, errors.Wrap(ErrVarMissing, "hostname")
+	}
+
+	namespace, ok := ctx.Value(varNamespace).(string)
+	if !ok {
+		return nil, errors.Wrap(ErrVarMissing, "namespace")
+	}
+
+	name, ok := ctx.Value(varName).(string)
+	if !ok {
+		return nil, errors.Wrap(ErrVarMissing, "name")
+	}
+
+	version, ok := ctx.Value(varVersion).(string)
+	if !ok {
+		return nil, errors.Wrap(ErrVarMissing, "version")
+	}
+
+	os, ok := ctx.Value(varOS).(string)
+	if !ok {
+		return nil, errors.Wrap(ErrVarMissing, string(varOS))
+	}
+
+	architecture, ok := ctx.Value(varArchitecture).(string)
+	if !ok {
+		return nil, errors.Wrap(ErrVarMissing, string(varArchitecture))
+	}
+
+	return retrieveProviderArchiveRequest{
+		Hostname:  hostname,
+		Namespace: namespace,
+		Name:      name,
+		Version:   version,
+		OS: os,
+		Architecture: architecture,
+	}, nil
+
 }
 
 // ErrorEncoder translates domain specific errors to HTTP status codes.

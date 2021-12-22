@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/TierMobility/boring-registry/pkg/core"
+	"github.com/TierMobility/boring-registry/pkg/storage"
 	"github.com/go-kit/kit/endpoint"
 	httptransport "github.com/go-kit/kit/transport/http"
 	"golang.org/x/sync/errgroup"
@@ -67,6 +68,30 @@ func (mw loggingMiddleware) ListProviderInstallation(ctx context.Context, hostna
 	return mw.next.ListProviderInstallation(ctx, hostname, namespace, name, version)
 }
 
+func (mw loggingMiddleware) RetrieveProviderArchive(ctx context.Context, hostname string, provider core.Provider) (_ []byte, err error) {
+	defer func(begin time.Time) {
+		logger := level.Info(mw.logger)
+		if err != nil {
+			logger = level.Error(mw.logger)
+		}
+
+		_ = logger.Log(
+			"op", "GetMirroredProviders",
+			"hostname", hostname,
+			"namespace", provider.Namespace,
+			"name", provider.Name,
+			"version", provider.Version,
+			"os", provider.OS,
+			"arch", provider.Arch,
+			"took", time.Since(begin),
+			"err", err,
+		)
+
+	}(time.Now())
+
+	return mw.next.RetrieveProviderArchive(ctx, hostname, provider)
+}
+
 // LoggingMiddleware is a logging Service middleware.
 func LoggingMiddleware(logger log.Logger) Middleware {
 	return func(next Service) Service {
@@ -86,6 +111,7 @@ type proxyRegistry struct {
 
 // ListProviderVersions returns the available versions fetched from the upstream registry, as well as from the pull-through cache
 func (p *proxyRegistry) ListProviderVersions(ctx context.Context, hostname, namespace, name string) (*ProviderVersions, error) {
+	// TODO(oliviermichaelis): the errgroup might not be right, as we want to return both errors in case upstream is down and cache does not contain the provider
 	g, _ := errgroup.WithContext(ctx)
 
 	// Get providers from the upstream registry if it is reachable
@@ -105,24 +131,28 @@ func (p *proxyRegistry) ListProviderVersions(ctx context.Context, hostname, name
 	})
 
 	// Get provider versions from the pull-through cache
-	cachedVersions := &ProviderVersions{}
+	cachedVersions := &ProviderVersions{Versions: make(map[string]EmptyObject)}
 	// TODO(oliviermichaelis): check for concurrency problems
 	g.Go(func() (err error) {
-		cachedVersions, err = p.next.ListProviderVersions(ctx, hostname, namespace, name)
+		providerVersions, err := p.next.ListProviderVersions(ctx, hostname, namespace, name)
 		if err != nil {
 			return err
 		}
+
+		// We can only assign cachedVersions once we know that err is non-nil. Otherwise the map is not initialized
+		cachedVersions = providerVersions
 		return nil
 	})
 
 	if err := g.Wait(); err != nil {
+		var opError *net.OpError
+		var errProviderNotMirrored *storage.ErrProviderNotMirrored
 		// Check for net.OpError, as that is an indication for network errors. There is likely a better solution to the problem
-		var e *net.OpError
-		if !errors.As(err, &e) {
-			return nil, err
+		if errors.As(err, &opError) {
+			fmt.Println(fmt.Errorf("couldn't reach upstream registry: %v", err)) // TODO(oliviermichaelis): use proper logging
+		} else if errors.As(err, &errProviderNotMirrored) {
+			fmt.Println(err.Error())
 		}
-		// TODO(oliviermichaelis): log this properly and expose a metric
-		fmt.Println(fmt.Errorf("couldn't reach upstream registry: %v", err))
 	}
 
 	// Merge both maps together
@@ -150,6 +180,7 @@ func (p *proxyRegistry) ListProviderInstallation(ctx context.Context, hostname, 
 		Archives: make(map[string]Archive),
 	}
 	g.Go(func() error {
+		// TODO(oliviermichaelis): pass short-living context here
 		versions, err := p.getUpstreamProviders(ctx, hostname, namespace, name)
 		if err != nil {
 			return err
@@ -222,6 +253,11 @@ func (p *proxyRegistry) getUpstreamProviders(ctx context.Context, hostname, name
 		return nil, fmt.Errorf("failed type assertion for %v", response)
 	}
 	return resp.Versions, nil
+}
+
+func (p *proxyRegistry) RetrieveProviderArchive(ctx context.Context, hostname string, provider core.Provider) ([]byte, error) {
+	// TODO(oliviermichaelis): get provider from upstream if not available locally
+	return p.next.RetrieveProviderArchive(ctx, hostname, provider)
 }
 
 func ProxyingMiddleware() Middleware {

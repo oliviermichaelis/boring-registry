@@ -3,7 +3,7 @@ package mirror
 import (
 	"context"
 	"fmt"
-
+	"github.com/TierMobility/boring-registry/pkg/core"
 	"github.com/go-kit/kit/endpoint"
 )
 
@@ -55,5 +55,39 @@ func listProviderInstallationEndpoint(svc Service) endpoint.Endpoint {
 		}
 
 		return archives, nil
+	}
+}
+
+type retrieveProviderArchiveRequest struct {
+	Hostname  string `json:"hostname,omitempty"`
+	Namespace string `json:"namespace,omitempty"`
+	Name      string `json:"name,omitempty"`
+	Version   string `json:"version,omitempty"`
+	OS 		string `json:"os,omitempty"`
+	Architecture string `json:"architecture,omitempty"`
+}
+
+func retrieveProviderArchiveEndpoint(svc Service) endpoint.Endpoint {
+	return func(ctx context.Context, request interface{}) (interface{}, error) {
+		req, ok := request.(retrieveProviderArchiveRequest)
+		if !ok {
+			return nil, fmt.Errorf("type assertion failed for retrieveProviderArchiveRequest")
+		}
+
+		provider := core.Provider{
+			Namespace: req.Namespace,
+			Name:     req.Name ,
+			Version:   req.Version,
+			OS:        req.OS,
+			Arch:      req.Architecture,
+		}
+
+		// TODO(oliviermichaelis) should this be an io.Reader?
+		archive, err := svc.RetrieveProviderArchive(ctx, req.Hostname, provider)
+		if err != nil {
+			return nil, err
+		}
+
+		return archive, nil
 	}
 }
