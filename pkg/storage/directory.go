@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"bufio"
 	"context"
 	"fmt"
 	"github.com/TierMobility/boring-registry/pkg/core"
@@ -30,10 +31,27 @@ func (d DirectoryStorage) GetCustomProviders(ctx context.Context, opts ProviderO
 	return d.getProviders(ctx, customProvidersPrefix, opts)
 }
 
-func (d DirectoryStorage) GetProviderArchive(ctx context.Context, hostname string, p core.Provider) ([]byte, error) {
+func (d DirectoryStorage) GetProviderArchive(ctx context.Context, hostname string, p core.Provider) (io.Reader, error) {
 	// TODO check if file exists and return corresponding error that we can match on from the caller to determine if it's missing
 	f := fmt.Sprintf("%s/%s/%s/%s/%s/%s", d.path, mirrorPrefix, hostname, p.Namespace, p.Name, p.ArchiveFileName())
-	return os.ReadFile(f)
+	file, err := os.Open(f)
+	if err != nil {
+		opts := ProviderOpts{
+			Hostname:  hostname,
+			Namespace: p.Namespace,
+			Name:      p.Name,
+			Version:   p.Version,
+			OS:        p.OS,
+			Arch:      p.Arch,
+		}
+		return nil, &ErrProviderNotMirrored{
+			Err:  err,
+			Opts: opts,
+		}
+	}
+
+	r := bufio.NewReader(file)
+	return r, nil
 }
 
 func (d DirectoryStorage) GetModule(ctx context.Context, namespace, name, provider, version string) (module.Module, error) {
@@ -110,7 +128,7 @@ func (d *DirectoryStorage) getProviders(ctx context.Context, prefix string, opts
 			return nil
 		})
 	if err != nil {
-		return nil, ErrProviderNotMirrored{
+		return nil, &ErrProviderNotMirrored{
 			Opts: opts,
 			Err:  err,
 		}

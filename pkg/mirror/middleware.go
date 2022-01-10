@@ -9,13 +9,24 @@ import (
 	"github.com/go-kit/kit/endpoint"
 	httptransport "github.com/go-kit/kit/transport/http"
 	"golang.org/x/sync/errgroup"
+	"io"
 	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"time"
 
 	"github.com/go-kit/kit/log"
 	"github.com/go-kit/kit/log/level"
+)
+
+const (
+	// TODO(oliviermichaelis): set sensible timeouts
+	// requestTimeout is the timeout for an entire timeout. Should be <= than terraform request timeout
+	requestTimeout = 5 * time.Second
+
+	// upstreamTimeout has to be shorter than terraform context timeout
+	upstreamTimeout = 2 * time.Second
 )
 
 // Middleware is a Service middleware.
@@ -55,7 +66,7 @@ func (mw loggingMiddleware) ListProviderInstallation(ctx context.Context, hostna
 		}
 
 		_ = logger.Log(
-			"op", "GetMirroredProviders",
+			"op", "ListProviderInstallation",
 			"hostname", hostname,
 			"namespace", namespace,
 			"name", name,
@@ -68,7 +79,7 @@ func (mw loggingMiddleware) ListProviderInstallation(ctx context.Context, hostna
 	return mw.next.ListProviderInstallation(ctx, hostname, namespace, name, version)
 }
 
-func (mw loggingMiddleware) RetrieveProviderArchive(ctx context.Context, hostname string, provider core.Provider) (_ []byte, err error) {
+func (mw loggingMiddleware) RetrieveProviderArchive(ctx context.Context, hostname string, provider core.Provider) (_ io.Reader, err error) {
 	defer func(begin time.Time) {
 		logger := level.Info(mw.logger)
 		if err != nil {
@@ -76,7 +87,7 @@ func (mw loggingMiddleware) RetrieveProviderArchive(ctx context.Context, hostnam
 		}
 
 		_ = logger.Log(
-			"op", "GetMirroredProviders",
+			"op", "RetrieveProviderArchive",
 			"hostname", hostname,
 			"namespace", provider.Namespace,
 			"name", provider.Name,
@@ -104,9 +115,15 @@ func LoggingMiddleware(logger log.Logger) Middleware {
 
 // TODO(oliviermichaelis): split out into a separate file
 type proxyRegistry struct {
-	next                     Service                      // serve most requests via this service
-	listProviderVersions     map[string]endpoint.Endpoint // except for Service.ListProviderVersions
+	next                 Service // serve most requests via this service
+	logger               log.Logger
+	listProviderVersions map[string]endpoint.Endpoint // except for Service.ListProviderVersions
+	// Deprecated: not used anywhere
 	listProviderInstallation map[string]endpoint.Endpoint
+
+	// upstreamEndpoints uses the hostname as key to re-use clients to the upstream registries.
+	// The base URL is set, but the path should be set in the httptransport.EncodeRequestFunc
+	upstreamRegistries map[string]endpoint.Endpoint
 }
 
 // ListProviderVersions returns the available versions fetched from the upstream registry, as well as from the pull-through cache
@@ -164,28 +181,48 @@ func (p *proxyRegistry) ListProviderVersions(ctx context.Context, hostname, name
 }
 
 func (p *proxyRegistry) ListProviderInstallation(ctx context.Context, hostname, namespace, name, version string) (*Archives, error) {
-	g, _ := errgroup.WithContext(ctx)
+	// Get archives from the cache
+	eg, groupCtx := errgroup.WithContext(ctx)
+	results := make(chan *Archives, 2)
 
-	// Get archives from the pull-through cache
-	cachedArchives := &Archives{}
-	g.Go(func() (err error) {
-		cachedArchives, err = p.next.ListProviderInstallation(ctx, hostname, namespace, name, version)
-		if err != nil {
+	eg.Go(func() error {
+		var errProviderNotMirrored *storage.ErrProviderNotMirrored
+		res, err := p.next.ListProviderInstallation(groupCtx, hostname, namespace, name, version)
+		if errors.As(err, &errProviderNotMirrored) {
+			// return from the goroutine without propagating the error, as we've hit an expected error
+			_ = level.Info(p.logger).Log(
+				"op", "ListProviderInstallation",
+				"message", "provider not cached",
+				"hostname", hostname,
+				"namespace", namespace,
+				"name", name,
+				"version", version,
+				"err", err,
+			)
+			return nil
+		} else if err != nil {
+			// return as we've hit an unforeseen error
 			return err
 		}
+		results <- res
 		return nil
 	})
 
-	upstreamArchives := &Archives{
-		Archives: make(map[string]Archive),
-	}
-	g.Go(func() error {
-		// TODO(oliviermichaelis): pass short-living context here
-		versions, err := p.getUpstreamProviders(ctx, hostname, namespace, name)
-		if err != nil {
+	eg.Go(func() error {
+		versions, err := p.getUpstreamProviders(groupCtx, hostname, namespace, name)
+		var opError *net.OpError
+		if errors.As(err, &opError) || os.IsTimeout(err) {
+			// The error is handled gracefully, as we expect the upstream registry to be down.
+			// Therefore we just log the error, but don't return it
+			p.logUpstreamError("ListProviderInstallation", hostname, namespace, name, version, err)
+			return nil
+		} else if err != nil {
 			return err
 		}
 
+		upstreamArchives := &Archives{
+			Archives: make(map[string]Archive),
+		}
 		for _, v := range versions {
 			if v.Version == version {
 				for _, platform := range v.Platforms {
@@ -204,47 +241,62 @@ func (p *proxyRegistry) ListProviderInstallation(ctx context.Context, hostname, 
 				}
 			}
 		}
+
+		results <- upstreamArchives
 		return nil
 	})
 
-	if err := g.Wait(); err != nil {
-		// Check for net.OpError, as that is an indication for network errors. There is likely a better solution to the problem
-		var e *net.OpError
-		if !errors.As(err, &e) {
-			return nil, err
-		}
-		// TODO(oliviermichaelis): log this properly and expose a metric
-		fmt.Println(fmt.Errorf("couldn't reach upstream registry: %v", err))
+	if err := eg.Wait(); err != nil {
+		return nil, err
 	}
 
-	// Warning, this is overwriting locally cached archives. In case a version was deleted from the upstream, we can't serve it locally anymore
+	if len(results) == 0 {
+		return nil, fmt.Errorf("no results were returned")
+	}
+
+	// Warning, this is potentially overwriting locally cached archives. In case a version was deleted from the upstream, we can potentially not serve it locally anymore
 	// This could be solved with a more complex merge
-	for k, v := range upstreamArchives.Archives {
-		cachedArchives.Archives[k] = v
+	mergedArchive := make(map[string]Archive)
+	for len(results) > 0 {
+		a := <-results
+		for k, v := range a.Archives {
+			mergedArchive[k] = v
+		}
 	}
 
-	return cachedArchives, nil
+	return &Archives{Archives: mergedArchive}, nil
+}
+
+func (p *proxyRegistry) RetrieveProviderArchive(ctx context.Context, hostname string, provider core.Provider) (io.Reader, error) {
+	// retrieve the provider from the local cache if available
+	reader, err := p.next.RetrieveProviderArchive(ctx, hostname, provider)
+	var errProviderNotMirrored *storage.ErrProviderNotMirrored
+	if errors.As(err, &errProviderNotMirrored) {
+		return p.upstreamProviderArchive(ctx, hostname, provider)
+	}
+	return reader, err
 }
 
 func (p *proxyRegistry) getUpstreamProviders(ctx context.Context, hostname, namespace, name string) ([]listResponseVersion, error) {
 	// Check if there is already an endpoint.Endpoint for the upstream registry, namespace and name
 	id := fmt.Sprintf("%s/%s/%s", hostname, namespace, name)
-	if _, ok := p.listProviderVersions[id]; !ok {
+	clientEndpoint, ok := p.listProviderVersions[id]
+	if !ok {
 		upstreamUrl, err := url.Parse(fmt.Sprintf("https://%s/v1/providers/%s/%s/versions", hostname, namespace, name))
 		if err != nil {
 			return nil, err
 		}
 
-		p.listProviderVersions[id] = httptransport.NewClient(http.MethodGet, upstreamUrl, encodeRequest, decodeUpstreamListProviderVersionsResponse).Endpoint()
+		// Creating a custom http client with timeout to upstream registries
+		c := http.DefaultClient
+		c.Timeout = upstreamTimeout
+		clientOption := httptransport.SetClient(c)
+
+		clientEndpoint = httptransport.NewClient(http.MethodGet, upstreamUrl, encodeRequest, decodeUpstreamListProviderVersionsResponse, clientOption).Endpoint()
+		p.listProviderVersions[id] = clientEndpoint
 	}
 
-	// TODO(oliviermichaelis): we pass the same context, even though the deadline should be slightly earlier
-	e, exists := p.listProviderVersions[id]
-	if !exists {
-		return nil, fmt.Errorf("the endpoint with id %s doesn't exist", id)
-	}
-
-	response, err := e(ctx, listVersionsRequest{}) // TODO(oliviermichaelis): The object is just a placeholder for now, as we don't have a payload
+	response, err := clientEndpoint(ctx, listVersionsRequest{}) // TODO(oliviermichaelis): The object is just a placeholder for now, as we don't have a payload
 	if err != nil {
 		return nil, err
 	}
@@ -255,15 +307,59 @@ func (p *proxyRegistry) getUpstreamProviders(ctx context.Context, hostname, name
 	return resp.Versions, nil
 }
 
-func (p *proxyRegistry) RetrieveProviderArchive(ctx context.Context, hostname string, provider core.Provider) ([]byte, error) {
-	// TODO(oliviermichaelis): get provider from upstream if not available locally
-	return p.next.RetrieveProviderArchive(ctx, hostname, provider)
+func (p *proxyRegistry) upstreamProviderArchive(ctx context.Context, hostname string, provider core.Provider) (io.Reader, error) {
+	clientEndpoint, ok := p.upstreamRegistries[hostname]
+	if !ok {
+		baseURL, err := url.Parse(fmt.Sprintf("https://%s", hostname))
+		if err != nil {
+			return nil, err
+		}
+
+		clientEndpoint = httptransport.NewClient(http.MethodGet, baseURL, encodeArchiveUrlRequest, decodeArchiveUrlResponse).Endpoint()
+		p.upstreamRegistries[hostname] = clientEndpoint
+	}
+
+	request := retrieveProviderArchiveRequest{
+		Hostname:     hostname,
+		Namespace:    provider.Namespace,
+		Name:         provider.Name,
+		Version:      provider.Version,
+		OS:           provider.OS,
+		Architecture: provider.Arch,
+	}
+	response, err := clientEndpoint(ctx, request)
+	if err != nil {
+		return nil, err
+	}
+
+	resp, ok := response.(downloadResponse)
+	if !ok {
+		return nil, fmt.Errorf("failed type assertion for %v", response)
+	}
+
+	fmt.Println(resp.DownloadURL)
+
+	return nil, nil
+
 }
 
-func ProxyingMiddleware() Middleware {
+func (p *proxyRegistry) logUpstreamError(op, hostname, namespace, name, version string, err error) {
+	_ = level.Info(p.logger).Log(
+		"op", op,
+		"message", "couldn't reach upstream registry",
+		"hostname", hostname,
+		"namespace", namespace,
+		"name", name,
+		"version", version,
+		"err", err,
+	)
+}
+
+func ProxyingMiddleware(logger log.Logger) Middleware {
 	return func(next Service) Service {
 		return &proxyRegistry{
 			next:                     next,
+			logger:                   logger,
 			listProviderVersions:     make(map[string]endpoint.Endpoint),
 			listProviderInstallation: make(map[string]endpoint.Endpoint),
 		}

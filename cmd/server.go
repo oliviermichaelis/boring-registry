@@ -312,7 +312,7 @@ func registerMirror(mux *http.ServeMux) error {
 
 	service := mirror.NewService(s)
 	{
-		service = mirror.ProxyingMiddleware()(service)
+		service = mirror.ProxyingMiddleware(logger)(service)
 		service = mirror.LoggingMiddleware(logger)(service)
 	}
 

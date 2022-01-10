@@ -13,3 +13,7 @@ type ErrProviderNotMirrored struct {
 func (e ErrProviderNotMirrored) Error() string {
 	return fmt.Sprintf("mirrored provider not found: %s/%s/%s: err: %s", e.Opts.Hostname, e.Opts.Namespace, e.Opts.Name, e.Err)
 }
+
+func (e ErrProviderNotMirrored) Unwrap() error {
+	return e.Err
+}

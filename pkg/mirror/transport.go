@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
+	"io"
 	"io/ioutil"
 	"net/http"
 
@@ -17,11 +19,11 @@ import (
 type muxVar string
 
 const (
-	varHostname  muxVar = "hostname"
-	varNamespace muxVar = "namespace"
-	varName      muxVar = "name"
-	varVersion   muxVar = "version"
-	varOS 		 muxVar = "os"
+	varHostname     muxVar = "hostname"
+	varNamespace    muxVar = "namespace"
+	varName         muxVar = "name"
+	varVersion      muxVar = "version"
+	varOS           muxVar = "os"
 	varArchitecture muxVar = "architecture"
 )
 
@@ -57,13 +59,11 @@ func MakeHandler(svc Service, auth endpoint.Middleware, options ...httptransport
 		),
 	)
 
-	// TODO(oliviermichaelis): create handler for downloads
-	// registry.terraform.io/hashicorp/random/terraform-provider-random_2.0.0_darwin_amd64.zip
 	r.Methods("GET").Path(`/{hostname}/{namespace}/{name}/terraform-provider-{nameplaceholder}_{version}_{os}_{architecture}.zip`).Handler(
 		httptransport.NewServer(
 			auth(retrieveProviderArchiveEndpoint(svc)),
 			decodeRetrieveProviderArchiveRequest,
-			httptransport.EncodeJSONResponse,
+			EncodeZipResponse,
 			append(
 				options,
 				httptransport.ServerBefore(extractMuxVars(varHostname, varNamespace, varName, varVersion, varOS, varArchitecture)),
@@ -72,6 +72,41 @@ func MakeHandler(svc Service, auth endpoint.Middleware, options ...httptransport
 		),
 	)
 	return r
+}
+
+func EncodeZipResponse(_ context.Context, w http.ResponseWriter, response interface{}) error {
+	w.Header().Set("Content-Type", "application/zip")
+	if headerer, ok := response.(httptransport.Headerer); ok {
+		for k, values := range headerer.Headers() {
+			for _, v := range values {
+				w.Header().Add(k, v)
+			}
+		}
+	}
+	code := http.StatusOK
+	if sc, ok := response.(httptransport.StatusCoder); ok {
+		code = sc.StatusCode()
+	}
+	w.WriteHeader(code)
+	if code == http.StatusNoContent {
+		return nil
+	}
+
+	r, ok := response.(io.Reader)
+	if !ok {
+		return fmt.Errorf("response is not of type io.Reader")
+	}
+
+	buf := new(bytes.Buffer)
+	if _, err := buf.ReadFrom(r); err != nil {
+		return fmt.Errorf("failed to read from response: %v", err)
+	}
+
+	if _, err := w.Write(buf.Bytes()); err != nil {
+		return fmt.Errorf("failed to write to response: %v", err)
+	}
+
+	return nil
 }
 
 func decodeListVersionsRequest(ctx context.Context, _ *http.Request) (interface{}, error) {
@@ -158,11 +193,11 @@ func decodeRetrieveProviderArchiveRequest(ctx context.Context, _ *http.Request) 
 	}
 
 	return retrieveProviderArchiveRequest{
-		Hostname:  hostname,
-		Namespace: namespace,
-		Name:      name,
-		Version:   version,
-		OS: os,
+		Hostname:     hostname,
+		Namespace:    namespace,
+		Name:         name,
+		Version:      version,
+		OS:           os,
 		Architecture: architecture,
 	}, nil
 
@@ -210,6 +245,28 @@ func extractMuxVars(keys ...muxVar) httptransport.RequestFunc {
 
 		return ctx
 	}
+}
+
+// TODO(oliviermichaelis): rename function
+//func encodeArchiveUrlRequest(provider core.Provider) httptransport.EncodeRequestFunc {
+func encodeArchiveUrlRequest(_ context.Context, r *http.Request, request interface{}) error {
+	req := request.(retrieveProviderArchiveRequest)
+	var buf bytes.Buffer
+	r.URL.Path = fmt.Sprintf("/v1/providers/%s/%s/%s/download/%s/%s", req.Namespace, req.Name, req.Version, req.OS, req.Architecture)
+	if err := json.NewEncoder(&buf).Encode(request); err != nil {
+		return err
+	}
+	r.Body = ioutil.NopCloser(&buf)
+	return nil
+}
+
+func decodeArchiveUrlResponse(_ context.Context, r *http.Response) (interface{}, error) {
+	var response downloadResponse
+
+	if err := json.NewDecoder(r.Body).Decode(&response); err != nil {
+		return nil, err
+	}
+	return response, nil
 }
 
 func encodeRequest(_ context.Context, r *http.Request, request interface{}) error {

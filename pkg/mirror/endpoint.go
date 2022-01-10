@@ -59,11 +59,11 @@ func listProviderInstallationEndpoint(svc Service) endpoint.Endpoint {
 }
 
 type retrieveProviderArchiveRequest struct {
-	Hostname  string `json:"hostname,omitempty"`
-	Namespace string `json:"namespace,omitempty"`
-	Name      string `json:"name,omitempty"`
-	Version   string `json:"version,omitempty"`
-	OS 		string `json:"os,omitempty"`
+	Hostname     string `json:"hostname,omitempty"`
+	Namespace    string `json:"namespace,omitempty"`
+	Name         string `json:"name,omitempty"`
+	Version      string `json:"version,omitempty"`
+	OS           string `json:"os,omitempty"`
 	Architecture string `json:"architecture,omitempty"`
 }
 
@@ -76,18 +76,24 @@ func retrieveProviderArchiveEndpoint(svc Service) endpoint.Endpoint {
 
 		provider := core.Provider{
 			Namespace: req.Namespace,
-			Name:     req.Name ,
+			Name:      req.Name,
 			Version:   req.Version,
 			OS:        req.OS,
 			Arch:      req.Architecture,
 		}
 
-		// TODO(oliviermichaelis) should this be an io.Reader?
-		archive, err := svc.RetrieveProviderArchive(ctx, req.Hostname, provider)
-		if err != nil {
-			return nil, err
-		}
-
-		return archive, nil
+		return svc.RetrieveProviderArchive(ctx, req.Hostname, provider)
 	}
+}
+
+// Copied from provider module
+type downloadResponse struct {
+	OS                  string `json:"os"`
+	Arch                string `json:"arch"`
+	Filename            string `json:"filename"`
+	DownloadURL         string `json:"download_url"`
+	Shasum              string `json:"shasum"`
+	ShasumsURL          string `json:"shasums_url"`
+	ShasumsSignatureURL string `json:"shasums_signature_url"`
+	//SigningKeys         SigningKeys `json:"signing_keys"`
 }
