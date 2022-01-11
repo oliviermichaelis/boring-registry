@@ -361,6 +361,7 @@ func ProxyingMiddleware(logger log.Logger) Middleware {
 			next:                     next,
 			logger:                   logger,
 			listProviderVersions:     make(map[string]endpoint.Endpoint),
+			upstreamRegistries:       make(map[string]endpoint.Endpoint),
 			listProviderInstallation: make(map[string]endpoint.Endpoint),
 		}
 	}

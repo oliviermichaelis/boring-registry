@@ -32,7 +32,6 @@ func (d DirectoryStorage) GetCustomProviders(ctx context.Context, opts ProviderO
 }
 
 func (d DirectoryStorage) GetProviderArchive(ctx context.Context, hostname string, p core.Provider) (io.Reader, error) {
-	// TODO check if file exists and return corresponding error that we can match on from the caller to determine if it's missing
 	f := fmt.Sprintf("%s/%s/%s/%s/%s/%s", d.path, mirrorPrefix, hostname, p.Namespace, p.Name, p.ArchiveFileName())
 	file, err := os.Open(f)
 	if err != nil {
@@ -102,6 +101,10 @@ func (d DirectoryStorage) ListProviderVersions(ctx context.Context, namespace, n
 	}
 
 	return collection.List(), nil
+}
+
+func (d *DirectoryStorage) StoreMirroredProvider(ctx context.Context, hostname string, p core.Provider, reader io.Reader) error {
+	panic("to be done")
 }
 
 func (d *DirectoryStorage) getProviders(ctx context.Context, prefix string, opts ProviderOpts) (*[]core.Provider, error) {
