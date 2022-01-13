@@ -77,20 +77,25 @@ func (s *service) ListProviderInstallation(ctx context.Context, hostname, namesp
 }
 
 func (s *service) RetrieveProviderArchive(ctx context.Context, hostname string, p core.Provider) (io.Reader, error) {
-	r, err := s.storage.GetProviderArchive(ctx, hostname, p)
-	if err == nil {
-		return r, nil
-	}
-	var errProviderNotMirrored *storage.ErrProviderNotMirrored
-	if !errors.As(err, &errProviderNotMirrored) {
-		return nil, err
-	}
+	return s.storage.GetProviderArchive(ctx, hostname, p)
+	//r, err := s.storage.GetProviderArchive(ctx, hostname, p)
+	//if err != nil {
+	//	return nil, err
+	//}
 
-	// TODO(oliviermichaelis): Download the archive from upstream and save locally
-	pipeReader, pipeWriter := io.Pipe()
-	reader := io.TeeReader(r, pipeWriter)
-	s.storage.StoreMirroredProvider(ctx, hostname, p, pipeReader)
-	return reader, nil
+	//var errProviderNotMirrored *storage.ErrProviderNotMirrored
+	//if !errors.As(err, &errProviderNotMirrored) {
+	//	return nil, err
+	//}
+	//
+	//// TODO(oliviermichaelis): Download the archive from upstream and save locally
+	//// TODO(oliviermichaelis): possible problems due to deadlocking read/writes
+	//pipeReader, pipeWriter := io.Pipe()
+	//reader := io.TeeReader(r, pipeWriter)
+	//if err := s.storage.StoreMirroredProvider(ctx, hostname, p, pipeReader); err != nil {
+	//	return nil, err
+	//}
+	//return reader, nil
 }
 
 // NewService returns a fully initialized Service.

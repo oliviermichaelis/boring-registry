@@ -17,6 +17,10 @@ type listVersionsResponse struct {
 	Versions map[string]EmptyObject `json:"versions"`
 }
 
+//func (l listVersionsResponse) Headers() http.Header {
+//	return map[string][]string{http.CanonicalHeaderKey("content-type"): {"application/json"}}
+//}
+
 func listProviderVersionsEndpoint(svc Service) endpoint.Endpoint {
 	return func(ctx context.Context, request interface{}) (interface{}, error) {
 		req, ok := request.(listVersionsRequest)

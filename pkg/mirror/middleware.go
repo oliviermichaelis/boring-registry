@@ -337,9 +337,13 @@ func (p *proxyRegistry) upstreamProviderArchive(ctx context.Context, hostname st
 		return nil, fmt.Errorf("failed type assertion for %v", response)
 	}
 
-	fmt.Println(resp.DownloadURL)
-
-	return nil, nil
+	client := http.Client{Timeout: 120 * time.Second}	// need to override default timeout, as the timeout will close the io.ReadCloser from the response body
+	archive, err := client.Get(resp.DownloadURL)
+	if err != nil {
+		return nil, err
+	}
+	// TODO(oliviermichaelis): response body should be closed
+	return archive.Body, nil
 
 }
 

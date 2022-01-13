@@ -5,15 +5,14 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
-	"io/ioutil"
-	"net/http"
-
 	"github.com/TierMobility/boring-registry/pkg/auth"
 	"github.com/go-kit/kit/endpoint"
 	httptransport "github.com/go-kit/kit/transport/http"
 	"github.com/gorilla/mux"
 	"github.com/pkg/errors"
+	"io"
+	"io/ioutil"
+	"net/http"
 )
 
 type muxVar string
@@ -37,6 +36,7 @@ func MakeHandler(svc Service, auth endpoint.Middleware, options ...httptransport
 		httptransport.NewServer(
 			auth(listProviderVersionsEndpoint(svc)),
 			decodeListVersionsRequest,
+			// TODO(oliviermichaelis): httptransport.EncodeJSONResponse sets charset header, we might have to use our own encoder
 			httptransport.EncodeJSONResponse,
 			append(
 				options,
@@ -74,7 +74,7 @@ func MakeHandler(svc Service, auth endpoint.Middleware, options ...httptransport
 	return r
 }
 
-func EncodeZipResponse(_ context.Context, w http.ResponseWriter, response interface{}) error {
+func EncodeZipResponse(ctx context.Context, w http.ResponseWriter, response interface{}) error {
 	w.Header().Set("Content-Type", "application/zip")
 	if headerer, ok := response.(httptransport.Headerer); ok {
 		for k, values := range headerer.Headers() {
@@ -97,13 +97,18 @@ func EncodeZipResponse(_ context.Context, w http.ResponseWriter, response interf
 		return fmt.Errorf("response is not of type io.Reader")
 	}
 
-	buf := new(bytes.Buffer)
-	if _, err := buf.ReadFrom(r); err != nil {
-		return fmt.Errorf("failed to read from response: %v", err)
-	}
+	// Old approach
+	//buf := new(bytes.Buffer)
+	//if _, err := buf.ReadFrom(r); err != nil {
+	//	return fmt.Errorf("failed to read from response: %v", err)
+	//}
+	//
+	//if _, err := w.Write(buf.Bytes()); err != nil {
+	//	return fmt.Errorf("failed to write to response: %v", err)
+	//}
 
-	if _, err := w.Write(buf.Bytes()); err != nil {
-		return fmt.Errorf("failed to write to response: %v", err)
+	if _, err := io.Copy(w, r); err != nil {
+		return err
 	}
 
 	return nil

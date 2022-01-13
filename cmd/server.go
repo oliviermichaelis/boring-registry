@@ -68,7 +68,7 @@ var serverCmd = &cobra.Command{
 		server := &http.Server{
 			Addr:         flagListenAddr,
 			ReadTimeout:  5 * time.Second,
-			WriteTimeout: 5 * time.Second,
+			WriteTimeout: 30 * time.Second, // TODO(oliviermichaelis): find cleaner solution instead of increasing the WriteTimeout for every endpoint
 			Handler:      mux,
 		}
 
@@ -320,7 +320,7 @@ func registerMirror(mux *http.ServeMux) error {
 		httptransport.ServerErrorHandler(
 			transport.NewLogErrorHandler(logger),
 		),
-		httptransport.ServerErrorEncoder(module.ErrorEncoder),
+		httptransport.ServerErrorEncoder(mirror.ErrorEncoder),
 		httptransport.ServerBefore(
 			httptransport.PopulateRequestContext,
 		),
