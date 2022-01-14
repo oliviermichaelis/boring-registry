@@ -31,7 +31,7 @@ func (d DirectoryStorage) GetCustomProviders(ctx context.Context, opts ProviderO
 	return d.getProviders(ctx, customProvidersPrefix, opts)
 }
 
-func (d DirectoryStorage) GetProviderArchive(ctx context.Context, hostname string, p core.Provider) (io.Reader, error) {
+func (d DirectoryStorage) GetProviderArchive(ctx context.Context, hostname string, p core.Provider) (io.ReadCloser, error) {
 	f := fmt.Sprintf("%s/%s/%s/%s/%s/%s", d.path, mirrorPrefix, hostname, p.Namespace, p.Name, p.ArchiveFileName())
 	file, err := os.Open(f)
 	if err != nil {
@@ -49,8 +49,7 @@ func (d DirectoryStorage) GetProviderArchive(ctx context.Context, hostname strin
 		}
 	}
 
-	r := bufio.NewReader(file)
-	return r, nil
+	return io.NopCloser(bufio.NewReader(file)), nil
 }
 
 func (d DirectoryStorage) GetModule(ctx context.Context, namespace, name, provider, version string) (module.Module, error) {

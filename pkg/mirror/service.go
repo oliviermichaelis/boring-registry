@@ -21,7 +21,7 @@ type Service interface {
 	ListProviderInstallation(ctx context.Context, hostname, namespace, name, version string) (*Archives, error)
 
 	// TODO(oliviermichaelis): document and link to protocol spec
-	RetrieveProviderArchive(ctx context.Context, hostname string, p core.Provider) (io.Reader, error)
+	RetrieveProviderArchive(ctx context.Context, hostname string, p core.Provider) (io.ReadCloser, error)
 }
 
 type service struct {
@@ -76,7 +76,7 @@ func (s *service) ListProviderInstallation(ctx context.Context, hostname, namesp
 	return archives, nil
 }
 
-func (s *service) RetrieveProviderArchive(ctx context.Context, hostname string, p core.Provider) (io.Reader, error) {
+func (s *service) RetrieveProviderArchive(ctx context.Context, hostname string, p core.Provider) (io.ReadCloser, error) {
 	return s.storage.GetProviderArchive(ctx, hostname, p)
 	//r, err := s.storage.GetProviderArchive(ctx, hostname, p)
 	//if err != nil {

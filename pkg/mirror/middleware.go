@@ -79,7 +79,7 @@ func (mw loggingMiddleware) ListProviderInstallation(ctx context.Context, hostna
 	return mw.next.ListProviderInstallation(ctx, hostname, namespace, name, version)
 }
 
-func (mw loggingMiddleware) RetrieveProviderArchive(ctx context.Context, hostname string, provider core.Provider) (_ io.Reader, err error) {
+func (mw loggingMiddleware) RetrieveProviderArchive(ctx context.Context, hostname string, provider core.Provider) (_ io.ReadCloser, err error) {
 	defer func(begin time.Time) {
 		logger := level.Info(mw.logger)
 		if err != nil {
@@ -267,7 +267,7 @@ func (p *proxyRegistry) ListProviderInstallation(ctx context.Context, hostname, 
 	return &Archives{Archives: mergedArchive}, nil
 }
 
-func (p *proxyRegistry) RetrieveProviderArchive(ctx context.Context, hostname string, provider core.Provider) (io.Reader, error) {
+func (p *proxyRegistry) RetrieveProviderArchive(ctx context.Context, hostname string, provider core.Provider) (io.ReadCloser, error) {
 	// retrieve the provider from the local cache if available
 	reader, err := p.next.RetrieveProviderArchive(ctx, hostname, provider)
 	var errProviderNotMirrored *storage.ErrProviderNotMirrored
@@ -307,7 +307,7 @@ func (p *proxyRegistry) getUpstreamProviders(ctx context.Context, hostname, name
 	return resp.Versions, nil
 }
 
-func (p *proxyRegistry) upstreamProviderArchive(ctx context.Context, hostname string, provider core.Provider) (io.Reader, error) {
+func (p *proxyRegistry) upstreamProviderArchive(ctx context.Context, hostname string, provider core.Provider) (io.ReadCloser, error) {
 	clientEndpoint, ok := p.upstreamRegistries[hostname]
 	if !ok {
 		baseURL, err := url.Parse(fmt.Sprintf("https://%s", hostname))
@@ -337,12 +337,13 @@ func (p *proxyRegistry) upstreamProviderArchive(ctx context.Context, hostname st
 		return nil, fmt.Errorf("failed type assertion for %v", response)
 	}
 
-	client := http.Client{Timeout: 120 * time.Second}	// need to override default timeout, as the timeout will close the io.ReadCloser from the response body
-	archive, err := client.Get(resp.DownloadURL)
+	// TODO(oliviermichaelis): timeout value depends on the server WriteTimeout
+	client := http.Client{Timeout: 30 * time.Second} // need to override default timeout, as the timeout will close the io.ReadCloser from the response body
+	archive, err := client.Get(resp.DownloadURL)     // Go expects us to close the Body once we're done reading from it.
 	if err != nil {
 		return nil, err
 	}
-	// TODO(oliviermichaelis): response body should be closed
+
 	return archive.Body, nil
 
 }
