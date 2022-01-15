@@ -24,7 +24,7 @@ var (
 
 type DirectoryStorage struct {
 	rwMutex sync.RWMutex
-	path string
+	path    string
 }
 
 func (d *DirectoryStorage) GetMirroredProviders(ctx context.Context, opts ProviderOpts) (*[]core.Provider, error) {

@@ -22,10 +22,6 @@ import (
 )
 
 const (
-	// TODO(oliviermichaelis): set sensible timeouts
-	// requestTimeout is the timeout for an entire timeout. Should be <= than terraform request timeout
-	requestTimeout = 5 * time.Second
-
 	// upstreamTimeout has to be shorter than terraform context timeout
 	upstreamTimeout = 2 * time.Second
 )
@@ -140,11 +136,8 @@ func LoggingMiddleware(logger log.Logger) Middleware {
 
 // TODO(oliviermichaelis): split out into a separate file
 type proxyRegistry struct {
-	next                 Service // serve most requests via this service
-	logger               log.Logger
-	listProviderVersions map[string]endpoint.Endpoint // except for Service.ListProviderVersions
-	// Deprecated: not used anywhere
-	listProviderInstallation map[string]endpoint.Endpoint
+	next   Service // serve most requests via this service
+	logger log.Logger
 
 	// upstreamEndpoints uses the hostname as key to re-use clients to the upstream registries.
 	// The base URL is set, but the path should be set in the httptransport.EncodeRequestFunc
@@ -333,22 +326,17 @@ func (p *proxyRegistry) MirrorProvider(ctx context.Context, hostname string, pro
 
 func (p *proxyRegistry) getUpstreamProviders(ctx context.Context, hostname, namespace, name string) ([]listResponseVersion, error) {
 	// Check if there is already an endpoint.Endpoint for the upstream registry, namespace and name
-	id := fmt.Sprintf("%s/%s/%s", hostname, namespace, name)
-	clientEndpoint, ok := p.listProviderVersions[id]
-	if !ok {
-		upstreamUrl, err := url.Parse(fmt.Sprintf("https://%s/v1/providers/%s/%s/versions", hostname, namespace, name))
-		if err != nil {
-			return nil, err
-		}
-
-		// Creating a custom http client with timeout to upstream registries
-		c := http.DefaultClient
-		c.Timeout = upstreamTimeout
-		clientOption := httptransport.SetClient(c)
-
-		clientEndpoint = httptransport.NewClient(http.MethodGet, upstreamUrl, encodeRequest, decodeUpstreamListProviderVersionsResponse, clientOption).Endpoint()
-		p.listProviderVersions[id] = clientEndpoint
+	upstreamUrl, err := url.Parse(fmt.Sprintf("https://%s/v1/providers/%s/%s/versions", hostname, namespace, name))
+	if err != nil {
+		return nil, err
 	}
+
+	// Creating a custom http client with timeout to the upstream registry
+	c := http.DefaultClient
+	c.Timeout = upstreamTimeout
+	clientOption := httptransport.SetClient(c)
+
+	clientEndpoint := httptransport.NewClient(http.MethodGet, upstreamUrl, encodeRequest, decodeUpstreamListProviderVersionsResponse, clientOption).Endpoint()
 
 	response, err := clientEndpoint(ctx, listVersionsRequest{}) // TODO(oliviermichaelis): The object is just a placeholder for now, as we don't have a payload
 	if err != nil {
@@ -437,11 +425,9 @@ func (p *proxyRegistry) logUpstreamError(op, hostname, namespace, name, version 
 func ProxyingMiddleware(logger log.Logger) Middleware {
 	return func(next Service) Service {
 		return &proxyRegistry{
-			next:                     next,
-			logger:                   logger,
-			listProviderVersions:     make(map[string]endpoint.Endpoint),
-			upstreamRegistries:       make(map[string]endpoint.Endpoint),
-			listProviderInstallation: make(map[string]endpoint.Endpoint),
+			next:                 next,
+			logger:               logger,
+			upstreamRegistries:   make(map[string]endpoint.Endpoint),
 		}
 	}
 }
