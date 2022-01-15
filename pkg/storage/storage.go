@@ -21,7 +21,7 @@ type Storage interface {
 	GetMirroredProviders(ctx context.Context, opts ProviderOpts) (*[]core.Provider, error)
 	GetCustomProviders(ctx context.Context, opts ProviderOpts) (*[]core.Provider, error)
 	GetProviderArchive(ctx context.Context, hostname string, p core.Provider) (io.ReadCloser, error)
-	StoreMirroredProvider(ctx context.Context, hostname string, p core.Provider, reader io.Reader) error
+	StoreProvider(ctx context.Context, hostname string, provider core.Provider, reader io.Reader) error
 }
 
 type ProviderOpts struct {

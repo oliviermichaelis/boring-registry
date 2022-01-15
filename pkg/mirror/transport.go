@@ -92,16 +92,12 @@ func EncodeZipResponse(ctx context.Context, w http.ResponseWriter, response inte
 		return nil
 	}
 
-	r, ok := response.(io.ReadCloser)
+	r, ok := response.(io.Reader)
 	if !ok {
-		return fmt.Errorf("response is not of type io.ReadCloser")
+		return fmt.Errorf("response is not of type io.Reader")
 	}
 
 	if _, err := io.Copy(w, r); err != nil {
-		return err
-	}
-
-	if err := r.Close(); err != nil {
 		return err
 	}
 

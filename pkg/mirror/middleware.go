@@ -1,6 +1,7 @@
 package mirror
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -79,7 +80,7 @@ func (mw loggingMiddleware) ListProviderInstallation(ctx context.Context, hostna
 	return mw.next.ListProviderInstallation(ctx, hostname, namespace, name, version)
 }
 
-func (mw loggingMiddleware) RetrieveProviderArchive(ctx context.Context, hostname string, provider core.Provider) (_ io.ReadCloser, err error) {
+func (mw loggingMiddleware) RetrieveProviderArchive(ctx context.Context, hostname string, provider core.Provider) (_ io.Reader, err error) {
 	defer func(begin time.Time) {
 		logger := level.Info(mw.logger)
 		if err != nil {
@@ -101,6 +102,30 @@ func (mw loggingMiddleware) RetrieveProviderArchive(ctx context.Context, hostnam
 	}(time.Now())
 
 	return mw.next.RetrieveProviderArchive(ctx, hostname, provider)
+}
+
+func (mw loggingMiddleware) MirrorProvider(ctx context.Context, hostname string, provider core.Provider, r io.Reader) (err error) {
+	defer func(begin time.Time) {
+		logger := level.Info(mw.logger)
+		if err != nil {
+			logger = level.Error(mw.logger)
+		}
+
+		_ = logger.Log(
+			"op", "MirrorProvider",
+			"hostname", hostname,
+			"namespace", provider.Namespace,
+			"name", provider.Name,
+			"version", provider.Version,
+			"os", provider.OS,
+			"arch", provider.Arch,
+			"took", time.Since(begin),
+			"err", err,
+		)
+
+	}(time.Now())
+
+	return mw.next.MirrorProvider(ctx, hostname, provider, r)
 }
 
 // LoggingMiddleware is a logging Service middleware.
@@ -267,14 +292,43 @@ func (p *proxyRegistry) ListProviderInstallation(ctx context.Context, hostname, 
 	return &Archives{Archives: mergedArchive}, nil
 }
 
-func (p *proxyRegistry) RetrieveProviderArchive(ctx context.Context, hostname string, provider core.Provider) (io.ReadCloser, error) {
+func (p *proxyRegistry) RetrieveProviderArchive(ctx context.Context, hostname string, provider core.Provider) (io.Reader, error) {
 	// retrieve the provider from the local cache if available
 	reader, err := p.next.RetrieveProviderArchive(ctx, hostname, provider)
 	var errProviderNotMirrored *storage.ErrProviderNotMirrored
-	if errors.As(err, &errProviderNotMirrored) {
-		return p.upstreamProviderArchive(ctx, hostname, provider)
+	if err != nil {
+		if !errors.As(err, &errProviderNotMirrored) { // only return on unexpected errors
+			return nil, err
+		}
+	} else {
+		return reader, nil
 	}
-	return reader, err
+
+	// download the provider from the upstream registry, as it's not mirrored yet
+	b, err := p.upstreamProviderArchive(ctx, hostname, provider)
+	if err != nil {
+		return nil, err
+	}
+
+	go func() {
+		err := p.MirrorProvider(ctx, hostname, provider, bytes.NewReader(*b))
+		if err != nil {
+			_ = level.Error(p.logger).Log(
+				"message", "failed to store provider",
+				"hostname", hostname,
+				"namespace", provider.Namespace,
+				"name", provider.Name,
+				"version", provider.Version,
+				"err", err,
+			)
+		}
+	}()
+
+	return bytes.NewReader(*b), nil
+}
+
+func (p *proxyRegistry) MirrorProvider(ctx context.Context, hostname string, provider core.Provider, reader io.Reader) error {
+	return p.next.MirrorProvider(ctx, hostname, provider, reader)
 }
 
 func (p *proxyRegistry) getUpstreamProviders(ctx context.Context, hostname, namespace, name string) ([]listResponseVersion, error) {
@@ -307,7 +361,7 @@ func (p *proxyRegistry) getUpstreamProviders(ctx context.Context, hostname, name
 	return resp.Versions, nil
 }
 
-func (p *proxyRegistry) upstreamProviderArchive(ctx context.Context, hostname string, provider core.Provider) (io.ReadCloser, error) {
+func (p *proxyRegistry) upstreamProviderArchive(ctx context.Context, hostname string, provider core.Provider) (*[]byte, error) {
 	clientEndpoint, ok := p.upstreamRegistries[hostname]
 	if !ok {
 		baseURL, err := url.Parse(fmt.Sprintf("https://%s", hostname))
@@ -338,16 +392,36 @@ func (p *proxyRegistry) upstreamProviderArchive(ctx context.Context, hostname st
 	}
 
 	// TODO(oliviermichaelis): timeout value depends on the server WriteTimeout
+	begin := time.Now()
 	client := http.Client{Timeout: 30 * time.Second} // need to override default timeout, as the timeout will close the io.ReadCloser from the response body
 	archive, err := client.Get(resp.DownloadURL)     // Go expects us to close the Body once we're done reading from it.
 	if err != nil {
 		return nil, err
 	}
 
-	return archive.Body, nil
+	defer func() {
+		_ = archive.Body.Close()
+	}()
+
+	_ = level.Info(p.logger).Log(
+		"message", "successfully downloaded upstream provider",
+		"hostname", hostname,
+		"namespace", provider.Namespace,
+		"name", provider.Name,
+		"version", provider.Version,
+		"took", time.Since(begin),
+	)
+
+	b, err := io.ReadAll(archive.Body)
+	if err != nil {
+		return nil, err
+	}
+
+	return &b, nil
 
 }
 
+// TODO(oliviermichaelis): change parameters to use core.Provider
 func (p *proxyRegistry) logUpstreamError(op, hostname, namespace, name, version string, err error) {
 	_ = level.Info(p.logger).Log(
 		"op", op,

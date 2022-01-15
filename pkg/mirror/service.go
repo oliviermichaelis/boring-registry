@@ -21,7 +21,8 @@ type Service interface {
 	ListProviderInstallation(ctx context.Context, hostname, namespace, name, version string) (*Archives, error)
 
 	// TODO(oliviermichaelis): document and link to protocol spec
-	RetrieveProviderArchive(ctx context.Context, hostname string, p core.Provider) (io.ReadCloser, error)
+	RetrieveProviderArchive(ctx context.Context, hostname string, p core.Provider) (io.Reader, error)
+	MirrorProvider(ctx context.Context, hostname string, p core.Provider, reader io.Reader) error
 }
 
 type service struct {
@@ -76,26 +77,12 @@ func (s *service) ListProviderInstallation(ctx context.Context, hostname, namesp
 	return archives, nil
 }
 
-func (s *service) RetrieveProviderArchive(ctx context.Context, hostname string, p core.Provider) (io.ReadCloser, error) {
+func (s *service) RetrieveProviderArchive(ctx context.Context, hostname string, p core.Provider) (io.Reader, error) {
 	return s.storage.GetProviderArchive(ctx, hostname, p)
-	//r, err := s.storage.GetProviderArchive(ctx, hostname, p)
-	//if err != nil {
-	//	return nil, err
-	//}
+}
 
-	//var errProviderNotMirrored *storage.ErrProviderNotMirrored
-	//if !errors.As(err, &errProviderNotMirrored) {
-	//	return nil, err
-	//}
-	//
-	//// TODO(oliviermichaelis): Download the archive from upstream and save locally
-	//// TODO(oliviermichaelis): possible problems due to deadlocking read/writes
-	//pipeReader, pipeWriter := io.Pipe()
-	//reader := io.TeeReader(r, pipeWriter)
-	//if err := s.storage.StoreMirroredProvider(ctx, hostname, p, pipeReader); err != nil {
-	//	return nil, err
-	//}
-	//return reader, nil
+func (s *service) MirrorProvider(ctx context.Context, hostname string, p core.Provider, reader io.Reader) error {
+	return s.storage.StoreProvider(ctx, hostname, p, reader)
 }
 
 // NewService returns a fully initialized Service.

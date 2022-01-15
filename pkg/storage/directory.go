@@ -3,6 +3,7 @@ package storage
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"github.com/TierMobility/boring-registry/pkg/core"
 	"github.com/TierMobility/boring-registry/pkg/module"
@@ -10,8 +11,10 @@ import (
 	"io"
 	"io/fs"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
+	"sync"
 )
 
 var (
@@ -20,18 +23,19 @@ var (
 )
 
 type DirectoryStorage struct {
+	rwMutex sync.RWMutex
 	path string
 }
 
-func (d DirectoryStorage) GetMirroredProviders(ctx context.Context, opts ProviderOpts) (*[]core.Provider, error) {
+func (d *DirectoryStorage) GetMirroredProviders(ctx context.Context, opts ProviderOpts) (*[]core.Provider, error) {
 	return d.getProviders(ctx, mirrorPrefix, opts)
 }
 
-func (d DirectoryStorage) GetCustomProviders(ctx context.Context, opts ProviderOpts) (*[]core.Provider, error) {
+func (d *DirectoryStorage) GetCustomProviders(ctx context.Context, opts ProviderOpts) (*[]core.Provider, error) {
 	return d.getProviders(ctx, customProvidersPrefix, opts)
 }
 
-func (d DirectoryStorage) GetProviderArchive(ctx context.Context, hostname string, p core.Provider) (io.ReadCloser, error) {
+func (d *DirectoryStorage) GetProviderArchive(ctx context.Context, hostname string, p core.Provider) (io.ReadCloser, error) {
 	f := fmt.Sprintf("%s/%s/%s/%s/%s/%s", d.path, mirrorPrefix, hostname, p.Namespace, p.Name, p.ArchiveFileName())
 	file, err := os.Open(f)
 	if err != nil {
@@ -52,23 +56,23 @@ func (d DirectoryStorage) GetProviderArchive(ctx context.Context, hostname strin
 	return io.NopCloser(bufio.NewReader(file)), nil
 }
 
-func (d DirectoryStorage) GetModule(ctx context.Context, namespace, name, provider, version string) (module.Module, error) {
+func (d *DirectoryStorage) GetModule(ctx context.Context, namespace, name, provider, version string) (module.Module, error) {
 	panic("implement me")
 }
 
-func (d DirectoryStorage) ListModuleVersions(ctx context.Context, namespace, name, provider string) ([]module.Module, error) {
+func (d *DirectoryStorage) ListModuleVersions(ctx context.Context, namespace, name, provider string) ([]module.Module, error) {
 	panic("implement me")
 }
 
-func (d DirectoryStorage) UploadModule(ctx context.Context, namespace, name, provider, version string, body io.Reader) (module.Module, error) {
+func (d *DirectoryStorage) UploadModule(ctx context.Context, namespace, name, provider, version string, body io.Reader) (module.Module, error) {
 	panic("implement me")
 }
 
-func (d DirectoryStorage) GetProvider(ctx context.Context, namespace, name, version, os, arch string) (provider.Provider, error) {
+func (d *DirectoryStorage) GetProvider(ctx context.Context, namespace, name, version, os, arch string) (provider.Provider, error) {
 	panic("getProvider")
 }
 
-func (d DirectoryStorage) ListProviderVersions(ctx context.Context, namespace, name string) ([]provider.ProviderVersion, error) {
+func (d *DirectoryStorage) ListProviderVersions(ctx context.Context, namespace, name string) ([]provider.ProviderVersion, error) {
 	providerDir := fmt.Sprintf("%s/providers", d.path)
 	var files []string
 	err := filepath.WalkDir(providerDir,
@@ -102,8 +106,42 @@ func (d DirectoryStorage) ListProviderVersions(ctx context.Context, namespace, n
 	return collection.List(), nil
 }
 
-func (d *DirectoryStorage) StoreMirroredProvider(ctx context.Context, hostname string, p core.Provider, reader io.Reader) error {
-	panic("to be done")
+// StoreProvider should only be used for mirrored providers, as the prefix is hardcoded
+func (d *DirectoryStorage) StoreProvider(ctx context.Context, hostname string, provider core.Provider, reader io.Reader) error {
+	// Acquiring lock, as the methods operation is not an atomic filesystem operation
+	d.rwMutex.Lock()
+	defer d.rwMutex.Unlock()
+
+	opts := ProviderOpts{
+		Hostname:  hostname,
+		Namespace: provider.Namespace,
+		Name:      provider.Name,
+		Version:   provider.Version,
+		OS:        provider.OS,
+		Arch:      provider.Arch,
+	}
+	providers, err := d.getProviders(ctx, mirrorPrefix, opts)
+	var errProviderNotMirrored *ErrProviderNotMirrored
+	if err != nil {
+		if !errors.As(err, &errProviderNotMirrored) {
+			return err // return on unexpected errors
+		}
+	} else if len(*providers) != 0 {
+		return fmt.Errorf("can't store provider as it exists already")
+	}
+
+	p := fmt.Sprintf("%s/%s/%s/%s/%s/%s", d.path, mirrorPrefix, hostname, provider.Namespace, provider.Name, provider.ArchiveFileName())
+	if err := os.MkdirAll(path.Dir(p), 0755); err != nil {
+		return err
+	}
+
+	f, err := os.Create(p)
+	if err != nil {
+		return err
+	}
+	_, err = io.Copy(f, reader)
+
+	return err
 }
 
 func (d *DirectoryStorage) getProviders(ctx context.Context, prefix string, opts ProviderOpts) (*[]core.Provider, error) {
