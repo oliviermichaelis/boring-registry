@@ -156,7 +156,7 @@ func (d *DirectoryStorage) ListProviderVersions(ctx context.Context, namespace, 
 	}
 
 	// Shorten the provider paths for further processing into provider
-	collection := provider.NewCollection()
+	collection := NewCollection()
 	for _, f := range files {
 		trim := strings.TrimPrefix(f, providerDir)
 		p, err := provider.Parse(trim)

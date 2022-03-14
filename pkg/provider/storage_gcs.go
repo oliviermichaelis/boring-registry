@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	storage2 "github.com/TierMobility/boring-registry/pkg/storage"
 	"io/ioutil"
 	"path"
 	"time"
@@ -32,7 +33,7 @@ func (s *GCSStorage) ListProviderVersions(ctx context.Context, namespace, name s
 		Prefix: fmt.Sprintf("%s/", prefix),
 	}
 
-	collection := NewCollection()
+	collection := storage2.NewCollection()
 	it := s.sc.Bucket(s.bucket).Objects(ctx, query)
 
 	for {

@@ -85,6 +85,34 @@ func NewProviderFromArchive(filename string) (Provider, error) {
 	}, nil
 }
 
+// NewProviderFromObjectPath should only be used for modules and custom providers
+func NewProviderFromObjectPath(v string) (Provider, error) {
+	m := make(map[string]string)
+
+	for _, part := range strings.Split(v, "/") {
+		parts := strings.SplitN(part, "=", 2)
+		if len(parts) != 2 {
+			continue
+		}
+
+		m[parts[0]] = parts[1]
+	}
+
+	provider := Provider{
+		Namespace: m["namespace"],
+		Name:      m["name"],
+		Version:   m["version"],
+		OS:        m["os"],
+		Arch:      m["arch"],
+	}
+
+	if !provider.Valid() {
+		return Provider{}, fmt.Errorf("%q is not a valid path", v)
+	}
+
+	return provider, nil
+}
+
 type SigningKeys struct {
 	GPGPublicKeys []GPGPublicKey `json:"gpg_public_keys,omitempty"`
 }

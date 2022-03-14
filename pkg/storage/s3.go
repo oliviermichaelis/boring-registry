@@ -1,15 +1,12 @@
-package provider
+package storage
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/TierMobility/boring-registry/pkg/storage"
-	"io"
+	"github.com/TierMobility/boring-registry/pkg/core"
 	"path"
-	"strings"
 	"time"
 
 	"github.com/aws/aws-sdk-go/aws"
@@ -32,7 +29,7 @@ type S3Storage struct {
 }
 
 // GetProvider retrieves information about a provider from the S3 storage.
-func (s *S3Storage) GetProvider(ctx context.Context, namespace, name, version, os, arch string) (Provider, error) {
+func (s *S3Storage) GetProvider(ctx context.Context, namespace, name, version, os, arch string) (core.Provider, error) {
 	var (
 		pathPkg         = storagePath(s.bucketPrefix, namespace, name, version, os, arch)
 		pathSha         = shasumsPath(s.bucketPrefix, namespace, name, version)
@@ -42,40 +39,40 @@ func (s *S3Storage) GetProvider(ctx context.Context, namespace, name, version, o
 
 	shasumsURL, err := s.presignedURL(pathSha)
 	if err != nil {
-		return Provider{}, errors.Wrap(err, pathSig)
+		return core.Provider{}, errors.Wrap(err, pathSig)
 	}
 
 	signatureURL, err := s.presignedURL(pathSig)
 	if err != nil {
-		return Provider{}, err
+		return core.Provider{}, err
 	}
 
 	zipURL, err := s.presignedURL(pathPkg)
 	if err != nil {
-		return Provider{}, err
+		return core.Provider{}, err
 	}
 
 	signingKeysRaw, err := s.download(pathSigningKeys)
 	if err != nil {
-		return Provider{}, errors.Wrap(err, pathSigningKeys)
+		return core.Provider{}, errors.Wrap(err, pathSigningKeys)
 	}
 
-	var signingKey GPGPublicKey
+	var signingKey core.GPGPublicKey
 	if err := json.Unmarshal(signingKeysRaw, &signingKey); err != nil {
-		return Provider{}, err
+		return core.Provider{}, err
 	}
 
 	shasums, err := s.download(pathSha)
 	if err != nil {
-		return Provider{}, err
+		return core.Provider{}, err
 	}
 
-	shasum, err := readSHASums(bytes.NewReader(shasums), path.Base(pathPkg))
+	shasum, err := ReadSHASums(bytes.NewReader(shasums), path.Base(pathPkg))
 	if err != nil {
-		return Provider{}, err
+		return core.Provider{}, err
 	}
 
-	return Provider{
+	return core.Provider{
 		Namespace:           namespace,
 		Filename:            path.Base(pathPkg),
 		Name:                name,
@@ -86,24 +83,24 @@ func (s *S3Storage) GetProvider(ctx context.Context, namespace, name, version, o
 		DownloadURL:         zipURL,
 		SHASumsURL:          shasumsURL,
 		SHASumsSignatureURL: signatureURL,
-		SigningKeys: SigningKeys{
-			GPGPublicKeys: []GPGPublicKey{
+		SigningKeys: core.SigningKeys{
+			GPGPublicKeys: []core.GPGPublicKey{
 				signingKey,
 			},
 		},
 	}, nil
 }
 
-func (s *S3Storage) ListProviderVersions(ctx context.Context, namespace, name string) ([]ProviderVersion, error) {
+func (s *S3Storage) ListProviderVersions(ctx context.Context, namespace, name string) ([]core.ProviderVersion, error) {
 	input := &s3.ListObjectsV2Input{
 		Bucket: aws.String(s.bucket),
 		Prefix: aws.String(fmt.Sprintf("%s/", storagePrefix(s.bucketPrefix, namespace, name))),
 	}
 
-	collection := storage.NewCollection()
+	collection := NewCollection()
 	fn := func(page *s3.ListObjectsV2Output, last bool) bool {
 		for _, obj := range page.Contents {
-			provider, err := Parse(*obj.Key)
+			provider, err := core.NewProviderFromObjectPath(*obj.Key)
 			if err != nil {
 				continue
 			}
@@ -115,7 +112,7 @@ func (s *S3Storage) ListProviderVersions(ctx context.Context, namespace, name st
 	}
 
 	if err := s.s3.ListObjectsV2Pages(input, fn); err != nil {
-		return nil, errors.Wrap(ErrListFailed, err.Error())
+		return nil, &ErrProviderNotMirrored{Provider: core.Provider{Hostname: namespace, Name: name}, Err: err}
 	}
 
 	result := collection.List()
@@ -211,29 +208,6 @@ func (s *S3Storage) presignedURL(v string) (string, error) {
 	})
 
 	return req.Presign(15 * time.Minute)
-}
-
-// Deprecated: TODO(oliviermichaelis): remove function
-func readSHASums(r io.Reader, name string) (string, error) {
-	scanner := bufio.NewScanner(r)
-
-	sha := ""
-	for scanner.Scan() {
-		parts := strings.Split(scanner.Text(), " ")
-		if len(parts) != 3 {
-			continue
-		}
-
-		if parts[2] == name {
-			sha = parts[0]
-		}
-	}
-
-	if sha == "" {
-		return "", fmt.Errorf("did not find package: %s in shasums file", name)
-	}
-
-	return sha, nil
 }
 
 func (s *S3Storage) download(path string) ([]byte, error) {
